@@ -1,0 +1,166 @@
+---
+title: "Yamanaka_RNASeq_Analysis"
+output: html_document
+date: "2025-12-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("renv")
+##renv::init()        # Initialize project environment
+##renv::snapshot()    # Save package versions to renv.lock
+##renv::restore()     # Recreate exact environment elsewhere
+
+library(renv)
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Set Bioc version to latest (3.22)
+BiocManager::install(version = "3.22")
+
+bioc_pkgs <- c(
+  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+)
+
+BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble"))
+renv::settings$bioconductor.version("3.22")
+renv::snapshot()   # records exact versions in renv.lock
+
+
+library(here)
+library(fs)
+
+```
+
+Documentation of used code.
+
+## Load gene counts table
+
+I am setting the directory and giving the name for the gene count table to be loaded into the R environment.
+
+```{r read file}
+genecount_file <- "gene_counts_YFproject.csv"
+
+file_path <- here("data", "processed_data", "counts_data", genecount_file)
+
+M <- read.csv(file_path,
+              header = TRUE,
+              quote = "",
+              check.names = FALSE,
+              stringsAsFactors = FALSE,
+              row.names = 1)   # <- FIRST COLUMN as row names
+
+```
+
+### Adjust column and row names
+
+```{r column names}
+library(stringr)
+
+# --- Clean column names (sample names) ---
+colnames(M) <- colnames(M) %>%
+  str_remove_all('"') %>%        # remove any quotes
+  str_remove("^K_") %>%          # remove prefix "K_"
+  str_remove("_sorted\\.bam$")   # remove suffix "_sorted.bam"
+
+# --- Clean row names (Entrez IDs) ---
+rownames(M) <- rownames(M) %>%
+  str_remove_all('"')             # remove any quotes
+
+# display the first 6 rows:
+dt <- DT::datatable(M |> head())
+dt
+```
+
+I will perform the DESeq2 analysis still using the EntrezIDs because if I transform them into gene names first, I will lose information, since not all EntrezIDs have different gene names (there are duplicates, or NAs).
+
+## Optimize data before analysis
+I will remove genes with total counts below 10, as well as round values.
+
+```{r Table adjustments before analysis}
+#discard genes with a total count < 10
+min_count <- 10
+M <- M[rowSums(M) >= min_count,] #this steps reduces the amount of detected genes from 45569 to 23150
+
+```
+
+## Set up the Input for DESeq2
+
+In order to run the DESeq2 analysis, we need a meta table containing all information of different groups and treatments.
+
+```{r ColData}
+# Sample names must match the count matrix column names
+sample_names <- c("Y340", "Y341", "Y342", "Y343", "Y344", "Y345", "Y346", "Y347", "Y348", "Y349", 
+                  "Y350", "Y351", "Y352", "Y353", "Y354", "Y355", "Y356")
+
+# Create metadata
+colData <- data.frame(
+  row.names = sample_names,
+  group = c("control", "control", "control", "treated", "treated", "treated"),
+  treatment = c("drugA", "drugA", "drugA", "drugA", "drugA", "drugA")
+)
+
+# Make sure group/treatment are factors
+colData$group <- factor(colData$group)
+colData$treatment <- factor(colData$treatment)
+```
+
+
+
+
+
+### Transform Entrez IDs that were in the BAM files to gene names using org.Mm.eg.db
+
+```{r gene names}
+# load packages
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(dplyr)
+
+# Convert Entrez IDs to gene symbols
+entrez_ids <- rownames(M)
+gene_symbols <- mapIds(org.Mm.eg.db,
+                       keys = entrez_ids,
+                       column = "SYMBOL",
+                       keytype = "ENTREZID",
+                       multiVals = "first")  # take first if multiple matches
+
+
+
+```
+
+
+
+
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+```{r}
+
+```
+
