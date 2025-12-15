@@ -12,7 +12,14 @@ knitr::opts_chunk$set(echo = TRUE)
 ##renv::snapshot()    # Save package versions to renv.lock
 ##renv::restore()     # Recreate exact environment elsewhere
 
-library(renv)
+## Renew GitHub Token
+# You must have a GitHub Personal Access Token (PAT) stored securely.
+# If not already configured, run this once manually before using the script:
+#gitcreds_set()
+
+# # Retrieve token from the gitcreds store
+# token <- gitcreds::gitcreds_get()$password
+
 
 if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 
@@ -25,13 +32,33 @@ bioc_pkgs <- c(
 )
 
 BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
-renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble"))
+renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+renv::install("enrichplot")
 renv::settings$bioconductor.version("3.22")
 renv::snapshot()   # records exact versions in renv.lock
 
 
+
+library(usethis)
+library(renv)
+library(gitcreds)
+library(dplyr)
+library(stringr)
+library(DESeq2)
 library(here)
 library(fs)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(qs)
+library(enrichplot)
+
+#Use external function script
+source("scripts/plotPCA2.R")
+source("scripts/runGSEA.R")
 
 ```
 
@@ -58,7 +85,6 @@ M <- read.csv(file_path,
 ### Adjust column and row names
 
 ```{r column names}
-library(stringr)
 
 # --- Clean column names (sample names) ---
 colnames(M) <- colnames(M) %>%
@@ -99,42 +125,462 @@ sample_names <- c("Y340", "Y341", "Y342", "Y343", "Y344", "Y345", "Y346", "Y347"
 # Create metadata
 colData <- data.frame(
   row.names = sample_names,
-  group = c("control", "control", "control", "treated", "treated", "treated"),
-  treatment = c("drugA", "drugA", "drugA", "drugA", "drugA", "drugA")
+  time = c("3d", "3d", "3d", "3d", "3d", "3d", "3d", "3d", "2wks", "2wks", 
+           "2wks", "2wks", "2wks", "2wks", "2wks", "2wks", "2wks"),
+  genotype = c("Ctrl", "CrePos", "CrePos", "Ctrl", "Ctrl", "CrePos", "CrePos", "Ctrl", "CrePos", "CrePos", 
+               "Ctrl", "Ctrl", "Ctrl", "CrePos", "CrePos", "CrePos", "Ctrl"),
+  age_dis = c(129, 129, 107, 107, 83, 83, 55, 55, 121, 121, 
+              121, 121, 97, 97, 97, 69, 69), #age at dissection
+  age_ind = c(126, 126, 104, 104, 80, 80, 52, 52, 104, 104,
+              104, 104, 80, 80, 80, 52, 52) # age at doxycycline induction
 )
 
+# We will only use either age at dissection or age at doxycycline induction.
+
 # Make sure group/treatment are factors
-colData$group <- factor(colData$group)
-colData$treatment <- factor(colData$treatment)
+colData$time <- factor(colData$time)
+colData$genotype <- factor(colData$genotype)
+
+#Set reference levels
+colData$time <- relevel(colData$time, ref = "3d")
+colData$genotype <- relevel(colData$genotype, ref = "Ctrl")
+
+is.numeric(colData$age_dis)  # should be TRUE
+is.numeric(colData$age_ind)  # should be TRUE
+
+```
+
+## Run DESeq2 Analysis
+
+After setting up the input, we can run the actual analysis. Let's first check if the induction effect  of Yamanaka factors in Pax8-Cre positive animals is strong enough to manifest irrespective of time and age. 
+
+### Analysis 1 - Induction effect solo
+
+Running the first analysis
+
+```{r DESeq2 Analysis 1}
+dds_genotype <- DESeqDataSetFromMatrix(
+  countData = M,
+  colData = colData,
+  design = ~ ~ 1 + genotype #in theory you could leave out the "1 + " because this is the default
+  ) 
+dds_genotype <- DESeq(dds_genotype)
+
+#available test results listed
+resultsNames(dds_genotype)
+
+#see genotype effect
+res_genotype <-
+  results(dds_genotype,
+          name="genotype_CrePos_vs_Ctrl"
+  )
+
+
+#put results in a nice table
+dt <- DT::datatable(
+  res_genotype |> as.data.frame() |>
+    dplyr::filter(!is.na(padj), padj <= 0.05) |>
+    dplyr::arrange(padj),
+
+  options=list(scrollY="500px")
+)
+
+# convert numeric columns to scientific notation
+dt <- dt |>
+  DT::formatSignif(
+    sapply(dt$x$data, is.numeric),
+    digits=2
+  )
+dt
+
+
+```
+
+Now run quality control (QC) on this analysis, to check for batch effects, outliers, sample swaps with a first PCA.
+
+```{r PCA plots, warning = FALSE}
+
+#### Preparation for PCA ####
+# The "blind" parameter tells the function NOT to use the input object's model formula for identifying "valid" (expected) variation. 
+# We do this here because we have not yet found an optimal formula.
+# For QC and testing for batch effects we will use the "blind" parameter.
+
+vsd_blind <- vst(dds_genotype, blind=TRUE)
+
+saveRDS(vsd_blind,file="results/qc/vsd_blind_genotype.rds")
+
+plotPCA2(vsd_blind,
+         intgroup = "genotype",
+         ntop=500,
+         PCs=c(x=1,y=2))
+
+# plot PCA, coloring different genotypes and times
+colData(vsd_blind)$genotype_time <- factor(
+  paste(colData(vsd_blind)$genotype, colData(vsd_blind)$time, sep="_")
+)
+
+plotPCA2(vsd_blind,
+         intgroup = "genotype_time",
+         ntop = 500,
+         PCs = c(x=1, y=2),
+         colour = group)  # <- this maps colors)
+
+```
+
+Now creating a heatmap of the 500 most highly expressed genes.
+
+
+```{r Heatmap of DESeq2 Analysis 1}
+# Select top 500 most expressed genes (after DESeq2 normalization)
+selected <-
+  order(rowMeans(counts(dds_genotype,
+                        normalized=TRUE)
+  ),
+  decreasing=TRUE)[1:500]
+
+# Create a metadata dataframe for annotation
+df <- as.data.frame(colData(dds_genotype))[, c("age_dis", "genotype", "time")]
+
+# Optional: make factors for annotation
+df$genotype <- factor(df$genotype)
+df$time <- factor(df$time)
+
+pheatmap(assay(vsd_blind)[selected,],
+         cluster_rows=FALSE,
+         show_rownames=FALSE,
+         show_colnames=FALSE,
+         cluster_cols=TRUE,
+         annotation_col=df)
+
+
+```
+
+In order to check if the normalization "worked", I will plot a boxplot of the per-sample count distributions. All medians should be aligned.
+
+
+```{r Boxplot of Per-Sample Count Distributions}
+# melt counts
+df <- rbind(
+  reshape2::melt(log10(counts(dds_genotype, normalized=FALSE) + 1)) %>% mutate(mode="raw"),
+  reshape2::melt(log10(counts(dds_genotype, normalized=TRUE) + 1)) %>% mutate(mode="normalized")
+) %>%
+  dplyr::rename(gene=Var1, sample=Var2, count=value) %>% # rename to make variable names more meaningful
+  # merge metadata so you can color/fill by it
+  left_join(
+    as.data.frame(colData(dds_genotype)) %>% mutate(sample = rownames(.)),
+    by = "sample"
+  ) %>%
+  mutate(mode = factor(mode, levels=c("raw","normalized")))
+
+# boxplot colored by genotype
+ggplot(df, aes(x = sample, y = count, fill = genotype)) +
+  geom_boxplot(outlier.size = 0.5) +
+  facet_wrap(~mode, scales = "free_y", ncol = 2) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) +
+  labs(x = "Sample", y = "log10(count + 1)", fill = "Genotype")
+
+
 ```
 
 
+```{r Means and Medians}
+
+cnt <- counts(dds_genotype,normalized=TRUE)
+medians_log10 <- log10(colMedians(cnt |> as.matrix())+1)
+
+tapply(medians_log10, # what to group
+           names(medians_log10),
+       mean  # function to apply to grouped values
+) |>
+  sort(decreasing=TRUE) # sort the result
+
+colMeans <- apply(cnt, 2, mean)
+colMeans
+```
+
+There is not a sample that differs broadly from the others, nor is there a broad batch effect visible. Medians and means are very much aligned. 
 
 
+### Analysis 2 - Calculate multivariate DESeq2 model
 
-### Transform Entrez IDs that were in the BAM files to gene names using org.Mm.eg.db
+Performing DESeq-Analysis for more factors lets the system structure the data better, accounting for different variability, and therefore may expose more of significant, although small, effects of the genotype factor.
+
+The model I want to apply looks like this:
+
+- effect of interest: genotype
+
+- additional effect: time
+
+- covariate to control for: age_dis (numeric, Age of dissection)
+
+Biological question is: “What genes differ by genotype, accounting for time after induction and age at dissection?”
+
+```{r DESeq2 Analysis 2, message = FALSE}
+
+dds_multi <-
+  DESeqDataSetFromMatrix(countData = M,
+                         colData = colData,
+                         design= ~ age_dis + time + genotype #age_dis is treated as a continuous covariate
+  ) |>
+  DESeq()
+
+qsave(dds_multi, "results/differential_expression/dds_multi.qs")
+
+resultsNames(dds_multi)
+
+
+#Have a Look at the Genotype Effect in this Model
+res_multi <-
+  results(dds_multi, name="genotype_CrePos_vs_Ctrl")
+
+```
+
+
+I will now transform Entrez IDs that were in the BAM files to gene names using org.Mm.eg.db and add to the results  table.
 
 ```{r gene names}
-# load packages
-library(AnnotationDbi)
-library(org.Mm.eg.db)
-library(dplyr)
-
-# Convert Entrez IDs to gene symbols
-entrez_ids <- rownames(M)
+# Convert Entrez IDs of my res_results to gene symbols
+entrez_ids <- rownames(res_multi)
 gene_symbols <- mapIds(org.Mm.eg.db,
                        keys = entrez_ids,
                        column = "SYMBOL",
                        keytype = "ENTREZID",
                        multiVals = "first")  # take first if multiple matches
 
+#Add gene symbols to the results table
+res_multi_df <- as.data.frame(res_multi) |>
+  mutate(
+    entrez_id   = rownames(res_multi),
+    gene_symbol = gene_symbols[entrez_id]
+  )
+
+# Convert Entrez IDs of my res_results to gene names
+gene_names <- mapIds(
+  org.Mm.eg.db,
+  keys      = entrez_ids,
+  column    = "GENENAME",
+  keytype   = "ENTREZID",
+  multiVals = "first"
+)
+
+#Add gene names to the results table
+res_multi_df <- res_multi_df |>
+  mutate(gene_name = gene_names[entrez_id])
+
+#Check how many Entrez IDs do not correlate to a gene symbol
+table(is.na(res_multi_df$gene_symbol))
+# actually 68 genes are not connected to a gene symbol
+
+qsave(res_multi_df, "results/differential_expression/res_multi_df.qs")
+```
+
+
+Now let's look at the gene table. 
+
+```{r}
+#make a table
+dt <- DT::datatable(
+  res_multi_df |> as.data.frame() |>
+    dplyr::filter(!is.na(padj), padj <= 0.05) |>
+    dplyr::arrange(padj),
+
+  options=list(scrollY="500px",
+               lengthMenu = list(c(10, -1),
+                                 c('10','All'))
+  )
+)
+
+# convert numeric columns to scientific notation
+dt <- dt |>
+  DT::formatSignif(sapply(dt$x$data, is.numeric),
+                   digits=2
+  )
+dt
+
+```
+
+Looking now at the PCA with the new analysis and not blind VST.
+
+
+```{r Multivariate PCA plots}
+vsd_unblind <- vst(dds_multi, blind=FALSE)
+
+saveRDS(vsd_blind,file="results/qc/vsd_unblind_genotype.rds")
+
+plotPCA2(vsd_unblind,
+         intgroup = "genotype",
+         ntop=500,
+         PCs=c(x=1,y=2))
+
+# plot PCA, coloring different genotypes and times
+colData(vsd_unblind)$genotype_time <- factor(
+  paste(colData(vsd_unblind)$genotype, colData(vsd_blind)$time, sep="_")
+)
+
+plotPCA2(vsd_unblind,
+         intgroup = "genotype_time",
+         ntop = 500,
+         PCs = c(x=1, y=2),
+         colour = group)  # <- this maps colors)
+```
+
+It looks nearly identical to the "blind" version of the VST. 
+
+## Overrepresentation Analysis
+
+Now coming to the interpretable analyses, I will start with ORA. 
+
+
+```{r ORA}
+#if starting from here, load dds_multi 
+res_multi_df <- qread("results/differential_expression/res_multi_df.qs")
+
+#set "Universe" - defined as all genes that are actually expressed
+uni_genes <- res_multi_df |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes
+de_genes_up <- res_multi_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn <- res_multi_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+ego_result_up <- enrichGO(gene = de_genes_up,
+                          universe = uni_genes,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+
+DT::datatable(head(ego_result_up)) # shows all genes that are now enriched for the pathways and how many there are
+
+ego_result_dn <- enrichGO(
+  gene = de_genes_dn,
+  universe = uni_genes,
+  OrgDb = org.Mm.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable = TRUE
+)
+
+DT::datatable(head(ego_result_dn))
+```
+
+#### Visualization of ORA
+
+```{r ORA Visualization}
+
+dotplot(ego_result_up, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes : Dotplot")
+dotplot(ego_result_dn, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes : Dotplot")
+
+barplot(ego_result_up, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes : Barplot")
+barplot(ego_result_dn, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes : Barplot")
+
+#Category gene network plots
+cnetplot(ego_result_up, categorySize="pvalue", foldChange=NULL) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes : Cnetplot")
+cnetplot(ego_result_dn, categorySize="pvalue", foldChange=NULL) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes : Cnetplot")
+
+#Emapplots
+ego_result_up <- enrichplot::pairwise_termsim(ego_result_up)
+ego_result_dn <- enrichplot::pairwise_termsim(ego_result_dn)
+emapplot(ego_result_up, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes : Emapplot")
+emapplot(ego_result_dn, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes : Emapplot")
 
 
 ```
 
+## Gene Set Enrichment Analysis ##
+
+GSEA gene lists are ranked, by a principally arbitrary rank metric. The rank will be "walked down" and overlaps with the gene set will increase the score, while the score will decrease again for non-overlapping genes, giving a "curve", thus also giving a "spacial" information, in which rank area the overlaps occur.
+
+GSEA uses GO term descriptions and Normalized Enrichtment Score (NES): 
+A positive NES means → gene set is enriched at the top of the ranked list (upregulated).
+A negative NES means → gene set is enriched at the bottom (downregulated).
+
+```{r GSEA}
+##Create a ranked gene list for GSEA
+#use the Wald statistic (res$stat):
+
+df <- res_multi_df |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::arrange(desc(stat)) |>
+  dplyr::filter(!is.na(gene_symbol))
+
+geneList <- df$stat
+names(geneList) <- df$gene_symbol
+
+#using the external script
+gsea_results <- runGSEA(
+  geneList = geneList,
+  OrgDb = org.Mm.eg.db,
+  keyType = "SYMBOL",   # or "ENSEMBL", depending on your data
+  ontologies = c("BP","MF","CC")
+)
+
+#1. Check what’s in the list
+names(gsea_results)
+
+#2. Convert to a data frame
+bp_df <- as.data.frame(gsea_results$BP)
+mf_df <- as.data.frame(gsea_results$MF)
+cc_df <- as.data.frame(gsea_results$CC)
+
+#3. View top pathways
+head(bp_df[order(bp_df$p.adjust), ])
+
+#4. Extract only the significant pathways
+sig_bp <- bp_df[bp_df$p.adjust <= 0.05, ]
+
+#5. Access specific info
+# The column with actual contributing genes is 'core_enrichment'
+bp_df$core_enrichment[1]
+# Split into vector
+genes <- strsplit(bp_df$core_enrichment[1], "/")[[1]]
+
+sig_bp[, c("Description", "NES", "p.adjust")] 
+
+#6 Plot results
+bp_df <- as.data.frame(gsea_results$BP)
+bp_df <- bp_df[order(bp_df$p.adjust), ][1:10, ]  # top 10
+
+ggplot(bp_df, aes(x = reorder(Description, NES), y = NES)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(y = "Normalized Enrichment Score (NES)", x = "GO Term")
 
 
+# Dot plot
+dotplot(gsea_results$BP, showCategory = 15)
 
+# Enrichment plot for one gene set
+gseaplot2(gsea_results$BP, geneSetID = sig_bp$ID[1])
+
+
+```
 
 
 
@@ -142,7 +588,6 @@ gene_symbols <- mapIds(org.Mm.eg.db,
 
 This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
 ```{r cars}
 summary(cars)
@@ -160,7 +605,5 @@ Note that the `echo = FALSE` parameter was added to the code chunk to prevent pr
 
 
 
-```{r}
 
-```
 
