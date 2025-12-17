@@ -21,23 +21,23 @@ knitr::opts_chunk$set(echo = TRUE)
 # token <- gitcreds::gitcreds_get()$password
 
 
-if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 
 # Set Bioc version to latest (3.22)
-BiocManager::install(version = "3.22")
+#BiocManager::install(version = "3.22")
 
-bioc_pkgs <- c(
-  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
-  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
-)
+#bioc_pkgs <- c(
+#  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+#  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+#)
 
-BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
-renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
-renv::install("enrichplot")
-renv::settings$bioconductor.version("3.22")
-renv::snapshot()   # records exact versions in renv.lock
-
-
+#BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+#renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+#renv::install("enrichplot")
+#renv::install("tibble")
+#renv::install("ggrepel")
+#renv::settings$bioconductor.version("3.22")
+#renv::snapshot()   # records exact versions in renv.lock
 
 library(usethis)
 library(renv)
@@ -55,6 +55,8 @@ library(org.Mm.eg.db)
 library(clusterProfiler)
 library(qs)
 library(enrichplot)
+library(tibble)
+library(ggrepel)
 
 #Use external function script
 source("scripts/plotPCA2.R")
@@ -484,6 +486,8 @@ DT::datatable(head(ego_result_dn))
 
 #### Visualization of ORA
 
+There are many different plot types that we can use for visualization. 
+
 ```{r ORA Visualization}
 
 dotplot(ego_result_up, showCategory=10) +
@@ -503,11 +507,11 @@ cnetplot(ego_result_dn, categorySize="pvalue", foldChange=NULL) +
   ggtitle("GO Enrichment Analysis - Downregulated Genes : Cnetplot")
 
 #Emapplots
-ego_result_up <- enrichplot::pairwise_termsim(ego_result_up)
-ego_result_dn <- enrichplot::pairwise_termsim(ego_result_dn)
-emapplot(ego_result_up, showCategory=10) +
+ego_result_up_enrich <- enrichplot::pairwise_termsim(ego_result_up)
+ego_result_dn_enrich <- enrichplot::pairwise_termsim(ego_result_dn)
+emapplot(ego_result_up_enrich, showCategory=10) +
   ggtitle("GO Enrichment Analysis - Upregulated Genes : Emapplot")
-emapplot(ego_result_dn, showCategory=10) +
+emapplot(ego_result_dn_enrich, showCategory=10) +
   ggtitle("GO Enrichment Analysis - Downregulated Genes : Emapplot")
 
 
@@ -517,7 +521,7 @@ emapplot(ego_result_dn, showCategory=10) +
 
 GSEA gene lists are ranked, by a principally arbitrary rank metric. The rank will be "walked down" and overlaps with the gene set will increase the score, while the score will decrease again for non-overlapping genes, giving a "curve", thus also giving a "spacial" information, in which rank area the overlaps occur.
 
-GSEA uses GO term descriptions and Normalized Enrichtment Score (NES): 
+GSEA uses GO term descriptions and Normalized Enrichment Score (NES): 
 A positive NES means → gene set is enriched at the top of the ranked list (upregulated).
 A negative NES means → gene set is enriched at the bottom (downregulated).
 
@@ -576,34 +580,48 @@ ggplot(bp_df, aes(x = reorder(Description, NES), y = NES)) +
 # Dot plot
 dotplot(gsea_results$BP, showCategory = 15)
 
-# Enrichment plot for one gene set
+# Enrichment plot for one gene set, at the moment for the most significant pathway (chromosome segregation)
 gseaplot2(gsea_results$BP, geneSetID = sig_bp$ID[1])
 
 
 ```
 
 
-
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## Volcano Plot of significant differentially expressed genes
 
 
-```{r cars}
-summary(cars)
+```{r Volcano plot}
+
+#add significance and threshold
+lfc_thresh <- 1       # log2 fold change threshold
+p_thresh   <- 0.05    # adjusted p-value threshold
+
+#add significance column
+res_multi_df <- res_multi_df |>
+  mutate(
+    significant = ifelse(!is.na(padj) & padj <= p_thresh & abs(log2FoldChange) >= lfc_thresh,
+                         ifelse(log2FoldChange > 0, "Up", "Down"),
+                         "NotSig")
+  )
+
+# Select top 20 most significant genes
+top_genes <- res_multi_df |>
+  filter(significant != "NotSig") |>
+  arrange(padj) |>
+  slice_head(n = 20)  # pick 20 smallest padj
+
+# Create a clean dataset for plotting, filter out NA of padj in genes (reduces number of genes by 5386)
+res_plot <- res_multi_df |>
+  filter(!is.na(padj) & !is.na(log2FoldChange) & padj > 0)
+
+ggplot(res_plot, aes(x = log2FoldChange, y = -log10(padj), color = significant)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("Up" = "red", "Down" = "blue", "NotSig" = "grey")) +
+  geom_vline(xintercept = c(-lfc_thresh, lfc_thresh), linetype = "dashed") +
+  geom_hline(yintercept = -log10(p_thresh), linetype = "dashed") +
+  geom_text_repel(data = top_genes, aes(label = gene_symbol), size = 3) +
+  theme_minimal() +
+  labs(x = "log2 Fold Change", y = "-log10(p-value)", color = "Significance") +
+  ggtitle("Volcano Plot with Top Genes")
+
 ```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
-
-
-
-
-
