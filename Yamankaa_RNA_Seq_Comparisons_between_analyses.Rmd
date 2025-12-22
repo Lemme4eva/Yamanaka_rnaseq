@@ -1,0 +1,505 @@
+---
+title: "Yamanaka_RNASeq_Comparisons_Between_Analyses"
+output: html_document
+date: "2025-12-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+#install.packages("renv")
+##renv::init()        # Initialize project environment
+##renv::snapshot()    # Save package versions to renv.lock
+##renv::restore()     # Recreate exact environment elsewhere
+
+## Renew GitHub Token
+# You must have a GitHub Personal Access Token (PAT) stored securely.
+# If not already configured, run this once manually before using the script:
+#gitcreds_set()
+
+# # Retrieve token from the gitcreds store
+# token <- gitcreds::gitcreds_get()$password
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Set Bioc version to latest (3.22)
+#BiocManager::install(version = "3.22")
+
+#bioc_pkgs <- c(
+#  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+#  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+#)
+
+#BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+#renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+#renv::install("enrichplot")
+#renv::install("tibble")
+#renv::install("ggrepel")
+#renv::install("ggvenn")
+#renv::install("patchwork")
+#renv::settings$bioconductor.version("3.22")
+#renv::snapshot()   # records exact versions in renv.lock
+
+library(usethis)
+library(renv)
+library(gitcreds)
+library(dplyr)
+library(stringr)
+library(DESeq2)
+library(here)
+library(fs)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(qs)
+library(enrichplot)
+library(tibble)
+library(ggrepel)
+library(ggvenn)
+library(patchwork)
+
+#Use external function script
+source("scripts/plotPCA2.R")
+source("scripts/runGSEA.R")
+
+```
+
+Documentation of used code.
+In this script I compare results output from the other analysis (3 days vs. 2 weeks). 
+
+First I need to load my results files.
+
+```{r load results tables from former analyses}
+
+res_multi_df <- qread("results/differential_expression/res_multi_df.qs")
+res_3d_df <- qread("results/differential_expression/res_3d_df.qs")
+res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
+
+```
+
+
+I will use a log2FC of 0 here to get all up- or downregulated genes, irrespective of how much the expression changes. 
+
+```{r }
+#set "Universe" - defined as all genes that are actually expressed for 3d
+uni_genes_3d <- res_3d_df |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes 3d
+de_genes_up_3d <- res_3d_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes 3d
+de_genes_dn_3d <- res_3d_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+## looking at STRONG effects for 3d
+#upregulated genes
+de_genes_up_strong_3d <- res_3d_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn_strong_3d <- res_3d_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+### Now the same for our 2 weeks analysis
+#set "Universe" - defined as all genes that are actually expressed for 2 weeks
+uni_genes_2wks <- res_2wks_df |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes 2 wks
+de_genes_up_2wks <- res_2wks_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes 2 wks
+de_genes_dn_2wks <- res_2wks_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+## looking at STRONG effects
+#upregulated genes
+de_genes_up_strong_2wks <- res_2wks_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn_strong_2wks <- res_2wks_df |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+```
+
+# Creating overlaps of different conditions
+
+## Overlap of upregulated genes
+
+I will use Venn diagrams to depict overlaps between different timepoints
+
+```{r Venn diagram for upregulated genes}
+## Venn-Diagram
+gene_list_up <- list(
+  "Short term effect" = de_genes_up_3d,
+  "Long term effect" = de_genes_up_2wks
+)
+
+# using subtitle
+venn <- ggvenn(gene_list_up, 
+               fill_color = c("skyblue", "pink"),
+               stroke_size = 0.5,
+               set_name_size = 5,
+               text_size = 4) +
+  ggtitle("Upregulated Genes Overlap",
+          subtitle = "CrePos vs Ctrl (padj < 0.05)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10))
+
+venn
+```
+
+## Overlap of downregulated genes
+
+Now looking at downregulated genes.
+
+```{r Venn diagram for downregulated genes}
+## Venn-Diagram
+gene_list_dn <- list(
+  "Short term effect" = de_genes_dn_3d,
+  "Long term effect" = de_genes_dn_2wks
+)
+
+# using subtitle
+venn <- ggvenn(gene_list_dn, 
+               fill_color = c("skyblue", "pink"),
+               stroke_size = 0.5,
+               set_name_size = 5,
+               text_size = 4) +
+  ggtitle("Downregulated Genes Overlap",
+          subtitle = "CrePos vs Ctrl (padj < 0.05)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10))
+
+venn
+```
+
+Interestingly, there are more differentially expressed genes long-term. However, most of these only have a small fold change. If we change the log fold 2 change to 1, then the numbers are very different.
+
+#Venn diagram for strongly upregulated genes
+
+```{r Venn diagram for strongly upregulated genes}
+## Venn-Diagram
+gene_list_up_strong <- list(
+  "Short term effect" = de_genes_up_strong_3d,
+  "Long term effect" = de_genes_up_strong_2wks
+)
+
+# using subtitle
+venn <- ggvenn(gene_list_up_strong, 
+               fill_color = c("skyblue", "pink"),
+               stroke_size = 0.5,
+               set_name_size = 5,
+               text_size = 4) +
+  ggtitle("Strongly Upregulated Genes Overlap",
+          subtitle = "CrePos vs Ctrl (padj < 0.05, log2FoldChange > 1) ") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10))
+
+venn
+```
+
+#Venn diagram for strongly downregulated genes
+
+```{r Venn diagram for strongly downregulated genes}
+## Venn-Diagram
+gene_list_dn_strong <- list(
+  "Short term effect" = de_genes_dn_strong_3d,
+  "Long term effect" = de_genes_dn_strong_2wks
+)
+
+# using subtitle
+venn <- ggvenn(gene_list_dn_strong, 
+               fill_color = c("skyblue", "pink"),
+               stroke_size = 0.5,
+               set_name_size = 5,
+               text_size = 4) +
+  ggtitle("Strongly Downregulated Genes Overlap",
+          subtitle = "CrePos vs Ctrl (padj < 0.05, log2FoldChange < -1) ") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10))
+
+venn
+```
+
+# Venn diagram of all 4 categories showing any effects
+
+```{r Venn diagram for any up- AND downregulated genes together}
+## Venn-Diagram
+gene_list_all <- list(
+  "Short term upregulated" = de_genes_up_3d,
+  "Long term upregulated" = de_genes_up_2wks,
+  "Short term downregulated" = de_genes_dn_3d,
+  "Long term downregulated" = de_genes_dn_2wks
+)
+
+venn_4 <- ggvenn(gene_list_all, 
+                 fill_color = c("#E64B35", "#F39B7F", "#4DBBD5", "#91D1C2"),
+                 stroke_size = 0.5,
+                 set_name_size = 3,
+                 text_size = 2.5) +
+  ggtitle("All Differentially Regulated Genes",
+          subtitle = "padj < 0.05") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 9))
+
+venn_4
+```
+
+
+# Venn diagram of all 4 categories showing STRONG effects
+
+```{r Venn diagram for strongly up- AND downregulated genes together}
+## Venn-Diagram
+gene_list_all_strong <- list(
+  "Short term upregulated" = de_genes_up_strong_3d,
+  "Long term upregulated" = de_genes_up_strong_2wks,
+  "Short term downregulated" = de_genes_dn_strong_3d,
+  "Long term downregulated" = de_genes_dn_strong_2wks
+)
+
+venn_4 <- ggvenn(gene_list_all_strong, 
+                 fill_color = c("#E64B35", "#F39B7F", "#4DBBD5", "#91D1C2"),
+                 stroke_size = 0.5,
+                 set_name_size = 3,
+                 text_size = 2.5) +
+  ggtitle("Strongly Regulated Genes",
+          subtitle = "padj < 0.05, |log2FC| > 1") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 9))
+
+venn_4
+```
+
+Conclusion: There are no strongly altered genes that show a reverse effect long- to shortterm.
+
+However, these plots are also showing information that is actually already excluded from the way I created the lists. Therefore, I will use a different method to show these reversely regulated genes.
+
+## Reverse effects
+
+```{r reverse effects}
+
+# List 1: Short term UP vs Long term DOWN
+gene_list_up_then_down <- list(
+  "Short term UP" = de_genes_up_3d,
+  "Long term DOWN" = de_genes_dn_2wks
+)
+
+# List 2: Short term DOWN vs Long term UP
+gene_list_down_then_up <- list(
+  "Short term DOWN" = de_genes_dn_3d,
+  "Long term UP" = de_genes_up_2wks
+)
+
+# Venn 1: UP → DOWN (initial activation, then repression)
+venn_up_down <- ggvenn(gene_list_up_then_down, 
+                       fill_color = c("#E64B35", "#4DBBD5"),  # rot → blau
+                       stroke_size = 0.5,
+                       set_name_size = 4,
+                       text_size = 3.5) +
+  ggtitle("Initial Activation → Later Repression") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11, face = "bold"))
+
+# Venn 2: DOWN → UP (initial repression, then activation)
+venn_down_up <- ggvenn(gene_list_down_then_up, 
+                       fill_color = c("#4DBBD5", "#E64B35"),  # blau → rot
+                       stroke_size = 0.5,
+                       set_name_size = 4,
+                       text_size = 3.5) +
+  ggtitle("Initial Repression → Later Activation") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11, face = "bold"))
+
+# both next to each other
+combined <- venn_up_down + venn_down_up +
+  plot_annotation(
+    title = "Opposing Regulation Patterns: 3d vs 2wks",
+    subtitle = "CrePos vs Ctrl (padj < 0.05)",
+    theme = theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+                  plot.subtitle = element_text(hjust = 0.5, size = 10))
+  )
+
+combined
+```
+
+## Strong reverse effects
+
+```{r STRONG reverse effects}
+
+# List 1: Short term UP vs Long term DOWN
+gene_list_up_then_down <- list(
+  "Short term UP" = de_genes_up_strong_3d,
+  "Long term DOWN" = de_genes_dn_strong_2wks
+)
+
+# List 2: Short term DOWN vs Long term UP
+gene_list_down_then_up <- list(
+  "Short term DOWN" = de_genes_dn_strong_3d,
+  "Long term UP" = de_genes_up_strong_2wks
+)
+
+# Venn 1: UP → DOWN (initial activation, then repression)
+venn_up_down <- ggvenn(gene_list_up_then_down, 
+                       fill_color = c("#E64B35", "#4DBBD5"),  # rot → blau
+                       stroke_size = 0.5,
+                       set_name_size = 4,
+                       text_size = 3.5) +
+  ggtitle("Initial Activation → Later Repression") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11, face = "bold"))
+
+# Venn 2: DOWN → UP (initial repression, then activation)
+venn_down_up <- ggvenn(gene_list_down_then_up, 
+                       fill_color = c("#4DBBD5", "#E64B35"),  # blau → rot
+                       stroke_size = 0.5,
+                       set_name_size = 4,
+                       text_size = 3.5) +
+  ggtitle("Initial Repression → Later Activation") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11, face = "bold"))
+
+# both next to each other
+combined <- venn_up_down + venn_down_up +
+  plot_annotation(
+    title = "Strong Opposing Regulation Patterns: 3d vs 2wks",
+    subtitle = "CrePos vs Ctrl (padj < 0.05, |log2FC| > 1)",
+    theme = theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+                  plot.subtitle = element_text(hjust = 0.5, size = 10))
+  )
+
+combined
+```
+
+### extracting these specific genes with opposing expression patterns
+
+```{r extracting genes with opposing pattern, for any effect size}
+# Genes UP → DOWN (Overlap in first Venn)
+genes_up_then_down <- intersect(de_genes_up_3d, 
+                                 de_genes_dn_2wks)
+
+# Gene DOWN → UP (Overlap in second Venn)
+genes_down_then_up <- intersect(de_genes_dn_3d, 
+                                 de_genes_up_2wks)
+
+# Summary
+cat("Genes UP→DOWN:", length(genes_up_then_down), "\n")
+cat("Genes DOWN→UP:", length(genes_down_then_up), "\n")
+```
+
+
+# GO Term analysis for Opposingly expressed genes
+
+```{r GO opposing genes}
+
+#set "Universe" - defined as all genes that are actually expressed
+uni_genes_both_timepoints <- intersect(uni_genes_3d, uni_genes_2wks) 
+  
+
+ego_result_up_dn <- enrichGO(gene = genes_up_then_down,
+                          universe = uni_genes_both_timepoints,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+
+DT::datatable(head(ego_result_up_dn)) # yields no results
+
+ego_result_dn_up <- enrichGO(
+  gene = genes_down_then_up,
+  universe = uni_genes_both_timepoints,
+  OrgDb = org.Mm.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable = TRUE
+)
+
+DT::datatable(head(ego_result_dn_up))
+
+```
+
+This analysis did not yield much...
+
+
+# GO Term analysis for consistently up- / downregulated genes (overlap for both timepoints)
+
+I will only do this for the NOT strong effect analysis because of the low number of genes there.
+
+```{r GO consistent genes}
+
+#set "Universe" - defined as all genes that are actually expressed
+uni_genes_both_timepoints <- intersect(uni_genes_3d, uni_genes_2wks) 
+  
+# Genes UP at both timepoints
+genes_up_consist <- intersect(de_genes_up_3d, 
+                                 de_genes_up_2wks)
+
+# Gene DOWN at both timepoints
+genes_dn_consist <- intersect(de_genes_dn_3d, 
+                                 de_genes_dn_2wks)
+
+
+ego_result_up_consist <- enrichGO(gene = genes_up_consist,
+                          universe = uni_genes_both_timepoints,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+
+DT::datatable(head(ego_result_up_consist)) # yields no results
+
+ego_result_dn_consist <- enrichGO(
+  gene = genes_dn_consist,
+  universe = uni_genes_both_timepoints,
+  OrgDb = org.Mm.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable = TRUE
+)
+
+DT::datatable(head(ego_result_dn_consist))
+
+```
+
