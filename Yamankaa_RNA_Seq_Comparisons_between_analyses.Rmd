@@ -85,7 +85,7 @@ res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
 
 I will use a log2FC of 0 here to get all up- or downregulated genes, irrespective of how much the expression changes. 
 
-```{r }
+```{r preparing up- and downregulated gene subsets}
 #set "Universe" - defined as all genes that are actually expressed for 3d
 uni_genes_3d <- res_3d_df |>
   dplyr::filter(!is.na(padj)) |>

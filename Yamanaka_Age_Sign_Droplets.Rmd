@@ -1,0 +1,636 @@
+---
+title: "Yamanaka_Age_Signatures_Improved"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("renv")
+##renv::init()        # Initialize project environment
+##renv::snapshot()    # Save package versions to renv.lock
+##renv::restore()     # Recreate exact environment elsewhere
+
+## Renew GitHub Token
+# You must have a GitHub Personal Access Token (PAT) stored securely.
+# If not already configured, run this once manually before using the script:
+#gitcreds_set()
+
+# # Retrieve token from the gitcreds store
+# token <- gitcreds::gitcreds_get()$password
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Set Bioc version to latest (3.22)
+#BiocManager::install(version = "3.22")
+
+#bioc_pkgs <- c(
+#  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+#  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+#)
+
+#BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+#renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+#renv::install("enrichplot")
+#renv::install("zellkonverter", "SingleCellExperiment")
+#renv::install("scuttle", "scater")
+#renv::install("edgeR", "limma", "GSVA")
+#renv::install("matrixStats")
+#renv::install("tidyr")
+#renv::settings$bioconductor.version("3.22")
+#renv::snapshot()   # records exact versions in renv.lock
+
+library(usethis)
+library(renv)
+library(gitcreds)
+library(dplyr)
+library(stringr)
+library(DESeq2)
+library(here)
+library(fs)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(qs)
+library(enrichplot)
+library(tibble)
+library(ggrepel)
+
+library(zellkonverter)  # reads h5ad
+library(SingleCellExperiment)
+library(scuttle) # aggregateAcrossCells
+library(scater)
+library(edgeR)
+library(limma)
+library(GSVA)
+library(Matrix)
+library(matrixStats)
+library(tidyr)
+
+
+#Use external function script
+source("scripts/plotPCA2.R")
+source("scripts/runGSEA.R")
+
+```
+
+# ============================================================================
+# IMPROVED TABULA MURIS AGING SIGNATURE ANALYSIS
+# Key improvements: proper statistical testing, better normalization, 
+# filtering low-expressed genes, and more robust pseudobulk approach
+# ============================================================================
+
+
+# ============================================================================
+# 1. LOAD DATA (your original code was fine here)
+# ============================================================================
+```{r load Tabula muris kidney facs data}
+#sce <- zellkonverter::readH5AD("data/processed_data/counts_data/Kidney_facs_tabulamuris.h5ad")
+sce <- zellkonverter::readH5AD("data/processed_data/counts_data/Kidney_droplet_tabulamuris.h5ad")
+res_3d_df <- qread("results/differential_expression/res_3d_df.qs")
+res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
+```
+
+# ============================================================================
+# 2. IMPROVED CELL TYPE PROCESSING
+# ============================================================================
+```{r Cell type processing}
+# Check what cell types are available
+cat("=== Available cell types ===\n")
+print(table(colData(sce)$cluster_names))
+
+# Merge proximal tubule subtypes
+sce$cluster_names_merged <- sce$cluster_names
+
+# Target ALL proximal tubule variants specifically
+sce$cluster_names_merged <- gsub(
+  ".*(proximal convoluted tubule).*|.*(epithelial cell of proximal tubule).*", 
+  "Proximal Tubule", 
+  sce$cluster_names_merged, 
+  ignore.case = TRUE
+)
+
+# Verify the merge worked
+table(sce$cluster_names_merged)
+
+# Set as cell_type
+sce$cell_type <- sce$cluster_names_merged
+
+
+# Define epithelial types - now only looking at proximal tubules
+epi_types <- c(
+  "Proximal Tubule"
+)
+
+# Subset to epithelial cells
+sce_epi <- sce[, sce$cell_type %in% epi_types]
+
+cat(sprintf("\n=== Epithelial subset ===\n"))
+cat(sprintf("Total cells: %d\n", ncol(sce_epi)))
+print(table(sce_epi$cell_type, sce_epi$age))
+```
+
+# ============================================================================
+# 3. IMPROVED PSEUDOBULK CREATION
+# Key improvements: 
+# - Check for sufficient replicates per group
+# - Filter out genes with very low counts
+# - Ensure proper sample balance
+# ============================================================================
+
+```{r Pseudobulk creation}
+# Create pseudobulk: mouse × age × cell type
+pb <- aggregateAcrossCells(
+  x = sce_epi,
+  ids = DataFrame(
+    mouse = sce_epi$mouse.id,
+    age   = sce_epi$age,
+    type  = sce_epi$cell_type
+  ),
+  use.assay.type = "X"
+)
+
+# Create informative column names
+colnames(pb) <- paste(pb$type, pb$age, pb$mouse, sep = "_")
+
+cat("\n=== Pseudobulk summary ===\n")
+cat(sprintf("Total pseudobulk samples: %d\n", ncol(pb)))
+cat(sprintf("Genes: %d\n", nrow(pb)))
+
+# Check sample distribution
+sample_dist <- colData(pb) %>%
+  as.data.frame() %>%
+  group_by(type, age) %>%
+  summarise(n_mice = n(), .groups = "drop")
+
+cat("\n=== Samples per cell type and age ===\n")
+print(sample_dist)
+
+# IMPORTANT: Check if we have enough replicates for statistical testing
+min_replicates <- sample_dist %>%
+  group_by(type) %>%
+  summarise(min_n = min(n_mice)) %>%
+  pull(min_n)
+
+if (any(min_replicates < 2)) {
+  warning("Some cell types have fewer than 2 replicates per age group. Results may be unreliable.")
+}
+
+```
+
+
+# ============================================================================
+# 4. IMPROVED DIFFERENTIAL EXPRESSION ANALYSIS
+# Key improvements:
+# - Filter low-expressed genes BEFORE analysis
+# - Use limma-voom for better variance modeling
+# - Proper design matrix with cell type as covariate
+# - Extract results with proper multiple testing correction
+# ============================================================================
+
+```{r DE Analysis}
+# Prepare data
+counts <- assay(pb, "X")
+meta <- colData(pb) %>% as.data.frame()
+
+# Make age a factor with 1m as reference
+meta$age <- factor(meta$age, levels = c("1m","3m","18m","21m", "30m"))
+meta$type <- factor(meta$type)
+
+# Create DGEList
+dge <- DGEList(counts = counts, samples = meta)
+
+# CRITICAL: Filter lowly expressed genes
+# Keep genes with at least 1 CPM in at least 2 samples (minimum group size)
+keep <- filterByExpr(dge, min.count = 10, min.total.count = 100)
+cat(sprintf("\n=== Gene filtering ===\n"))
+cat(sprintf("Genes before filtering: %d\n", nrow(dge)))
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+cat(sprintf("Genes after filtering: %d\n", nrow(dge)))
+
+# assuming dge$samples$group is defined (from Perplexity AI, but yields the same gene numbers as having min.count=10 and min.total.count=15)
+#keep <- filterByExpr(dge, group = dge$samples$group)
+#dge  <- dge[keep, , keep.lib.sizes = FALSE]
+
+# Calculate normalization factors
+dge <- calcNormFactors(dge, method = "TMM")
+
+# Check library sizes
+cat("\n=== Library size summary ===\n")
+print(summary(dge$samples$lib.size))
+```
+
+# ============================================================================
+# Cell-type-specific analysis (proximal tubules)
+# ============================================================================
+
+
+```{r Proximal Tubule specific analysis}
+
+ct <- "Proximal Tubule"
+idx <- meta$type == ct & !is.na(meta$type)
+dge_ct <- dge[, idx]
+meta_ct <- meta[idx, ]
+
+
+# FIXED: Remove "m" suffix before numeric conversion
+meta_ct$age_num <- as.numeric(gsub("m", "", as.character(meta_ct$age)))
+
+cat("Age distribution:\n")
+print(table(meta_ct$age_num))
+
+# Continuous age design  
+design_ct <- model.matrix(~ age_num, data = meta_ct)
+colnames(design_ct)[2] <- "age_effect"
+
+cat(sprintf("  Total mice: %d\n", nrow(meta_ct)))
+
+# Run analysis
+v <- voomWithQualityWeights(dge_ct, design = design_ct, plot = FALSE)
+fit <- lmFit(v, design_ct)
+fit <- eBayes(fit, robust = TRUE)
+
+tt <- topTable(fit, coef = "age_effect", number = Inf, sort.by = "none")
+tt$gene <- rownames(tt)
+tt$cell_type <- ct
+
+sig_genes <- sum(tt$adj.P.Val < 0.05, na.rm = TRUE)
+up_genes <- sum(tt$adj.P.Val < 0.05 & tt$logFC > 0, na.rm = TRUE)
+down_genes <- sum(tt$adj.P.Val < 0.05 & tt$logFC < 0, na.rm = TRUE)
+
+#store results
+results_proxtub <- list()
+results_proxtub[[ct]] <- tt
+results_proxtub_df <- results_proxtub[[1]]  # Extract data.frame once
+
+cat(sprintf("  Significant genes (FDR < 0.05): %d\n", sig_genes))
+cat(sprintf("  Up with age: %d, Down with age: %d\n", up_genes, down_genes))
+cat(sprintf("  logFC = change per MONTH of age\n"))
+
+
+```
+
+
+# ============================================================================
+# DONT USE OPTION B: Combined analysis across all epithelial cells
+# Better for overall aging signature, but I did not adjust this analysis
+# ============================================================================
+
+```{r Combined analysis across all epithelial cells}
+cat("\n=== Running proximal tubular analysis ===\n")
+
+# Design matrix: control for cell type differences
+design_combined <- model.matrix(~ 0 + type + age, data = meta)
+colnames(design_combined) <- gsub("type", "", colnames(design_combined))
+
+# Voom transformation
+v_combined <- voomWithQualityWeights(dge, design = design_combined, plot = TRUE)
+
+# Fit model
+fit_combined <- lmFit(v_combined, design_combined)
+fit_combined <- eBayes(fit_combined, robust = TRUE)
+
+# Extract aging effect (age24m coefficient)
+aging_combined <- topTable(fit_combined, coef = "age24m", number = Inf, sort.by = "none")
+aging_combined$gene <- rownames(aging_combined)
+
+cat(sprintf("\n=== Combined epithelial analysis results ===\n"))
+cat(sprintf("Significant genes (FDR < 0.05): %d\n", sum(aging_combined$adj.P.Val < 0.05)))
+cat(sprintf("Up in aging: %d, Down in aging: %d\n",
+            sum(aging_combined$adj.P.Val < 0.05 & aging_combined$logFC > 0),
+            sum(aging_combined$adj.P.Val < 0.05 & aging_combined$logFC < 0)))
+
+```
+
+# ============================================================================
+# 5. CREATE AGING SIGNATURE (IMPROVED)
+# A. Use prox. Tubule analysis
+# B. Use only significant genes
+# ============================================================================
+
+```{r Create aging signature}
+
+# Use prox. Tubule analysis
+results_proxtub_extract <- results_proxtub_df %>%
+  select(gene, logFC, P.Value, adj.P.Val, AveExpr)
+
+# Option C: Only use significant genes for signature
+results_proxtub_sig_extract <- results_proxtub_df %>%
+  filter(adj.P.Val < 0.05) %>%
+  select(gene, logFC, P.Value, adj.P.Val, AveExpr)
+
+cat(sprintf("\n=== Aging signature sizes ===\n"))
+cat(sprintf("Proximal tubule analysis: %d genes\n", nrow(results_proxtub_extract)))
+cat(sprintf("Significant only: %d genes\n", nrow(results_proxtub_sig_extract)))
+
+
+```
+# ============================================================================
+# 6. IMPROVED COMPARISON WITH YAMANAKA DATA
+# Key improvements:
+# - Multiple testing correction awareness
+# - Filter by expression level overlap
+# - Weighted correlations by significance
+# ============================================================================
+
+```{r Comparison with Yamanaka data}
+compare_with_yamanaka <- function(aging_sig, yamanaka_res, timepoint_name) {
+  
+  # Merge
+  merged <- aging_sig %>%
+    inner_join(
+      yamanaka_res %>% 
+        dplyr::select(gene = gene_symbol, 
+                      yam_log2FC = log2FoldChange,
+                      yam_padj   = padj,
+                      yam_baseMean = baseMean),
+      by = "gene"
+    ) %>%
+    dplyr::filter(!is.na(logFC) & !is.na(yam_log2FC))
+  
+  # Basic correlation
+  cor_all  <- cor(merged$logFC, merged$yam_log2FC, method = "spearman")
+  cor_test <- cor.test(merged$logFC, merged$yam_log2FC, method = "spearman")
+  
+  # Weighted correlation – robust to NA / all-zero weights
+  cor_weighted <- NA
+  if ("adj.P.Val" %in% colnames(merged)) {
+    
+    merged_w <- merged %>%
+      dplyr::filter(!is.na(adj.P.Val), !is.na(yam_padj)) %>%
+      dplyr::mutate(weight = (1 - adj.P.Val) * (1 - yam_padj))
+    
+    if (nrow(merged_w) > 1 && all(merged_w$weight >= 0) && sum(merged_w$weight) > 0) {
+      cor_weighted <- cov.wt(
+        merged_w[, c("logFC", "yam_log2FC")],
+        wt  = merged_w$weight,
+        cor = TRUE
+      )$cor[1, 2]
+    }
+  }
+  
+  # Correlation for Yamanaka-significant genes
+  merged_sig_yam <- merged %>% dplyr::filter(!is.na(yam_padj), yam_padj < 0.05)
+  cor_sig_yam <- if (nrow(merged_sig_yam) > 10) {
+    cor(merged_sig_yam$logFC, merged_sig_yam$yam_log2FC, method = "spearman")
+  } else NA
+  
+  # Correlation for aging-significant genes
+  cor_sig_aging <- NA
+  if ("adj.P.Val" %in% colnames(merged)) {
+    merged_sig_aging <- merged %>% dplyr::filter(!is.na(adj.P.Val), adj.P.Val < 0.05)
+    if (nrow(merged_sig_aging) > 10) {
+      cor_sig_aging <- cor(merged_sig_aging$logFC, merged_sig_aging$yam_log2FC, 
+                           method = "spearman")
+    }
+  }
+  
+  # Print summary
+  cat(sprintf("\n=== %s comparison with aging signature ===\n", timepoint_name))
+  cat(sprintf("Overlapping genes: %d\n", nrow(merged)))
+  cat(sprintf("Spearman correlation (all): %.4f (p = %.2e)\n", 
+              cor_all, cor_test$p.value))
+  if (!is.na(cor_weighted)) {
+    cat(sprintf("Weighted correlation: %.4f\n", cor_weighted))
+  } else {
+    cat("Weighted correlation: NA (insufficient or invalid weights)\n")
+  }
+  if (!is.na(cor_sig_yam)) {
+    cat(sprintf("Correlation (Yamanaka-sig genes): %.4f (n=%d)\n", 
+                cor_sig_yam, nrow(merged_sig_yam)))
+  }
+  if (!is.na(cor_sig_aging)) {
+    cat(sprintf("Correlation (Aging-sig genes): %.4f (n=%d)\n", 
+                cor_sig_aging, nrow(merged_sig_aging)))
+  }
+  
+  # Anti-aging score
+  if ("adj.P.Val" %in% colnames(merged)) {
+    aging_sig_genes <- merged %>% dplyr::filter(!is.na(adj.P.Val), adj.P.Val < 0.05)
+    if (nrow(aging_sig_genes) > 0) {
+      reversed <- aging_sig_genes %>%
+        dplyr::mutate(is_reversed = sign(logFC) != sign(yam_log2FC))
+      pct_reversed <- mean(reversed$is_reversed) * 100
+      cat(sprintf("Aging-significant genes reversed: %.1f%% (%d/%d)\n",
+                  pct_reversed, sum(reversed$is_reversed), nrow(reversed)))
+    }
+  }
+  
+  invisible(list(
+    merged        = merged,
+    cor_all       = cor_all,
+    cor_weighted  = cor_weighted,
+    cor_sig_yam   = cor_sig_yam,
+    cor_sig_aging = cor_sig_aging,
+    p_value       = cor_test$p.value
+  ))
+}
+
+
+# Compare with both timepoints using combined aging signature (RECOMMENDED)
+comparison_3d <- compare_with_yamanaka(results_proxtub_extract, res_3d_df, "3 Days")
+comparison_2wks <- compare_with_yamanaka(results_proxtub_extract, res_2wks_df, "2 Weeks")
+
+comparison_3d <- compare_with_yamanaka(results_proxtub_sig_extract, res_3d_df, "3 Days")
+comparison_2wks <- compare_with_yamanaka(results_proxtub_sig_extract, res_2wks_df, "2 Weeks")
+
+# Store merged data for plotting
+merged_3d <- comparison_3d$merged
+merged_2wks <- comparison_2wks$merged
+
+```
+
+
+# ============================================================================
+# 7. VISUALIZATION (IMPROVED)
+# ============================================================================
+
+```{r Visualization}
+# Function for better correlation plots
+plot_aging_correlation_improved <- function(merged, timepoint, aging_sig_name = "Combined") {
+  
+  # Color by significance in both studies
+  plot_data <- merged %>%
+    mutate(
+      sig_status = case_when(
+        adj.P.Val < 0.05 & yam_padj < 0.05 ~ "Both significant",
+        adj.P.Val < 0.05 ~ "Aging only",
+        yam_padj < 0.05 ~ "Yamanaka only",
+        TRUE ~ "Neither"
+      ),
+      sig_status = factor(sig_status, 
+                         levels = c("Both significant", "Aging only", 
+                                   "Yamanaka only", "Neither"))
+    )
+  
+  # Calculate correlation for plot annotation
+  cor_val <- cor(plot_data$logFC, plot_data$yam_log2FC, method = "spearman")
+  cor_test <- cor.test(plot_data$logFC, plot_data$yam_log2FC, method = "spearman")
+  
+  p <- ggplot(plot_data, aes(x = logFC, y = yam_log2FC, color = sig_status)) +
+    geom_point(alpha = 0.5, size = 1.5) +
+    geom_smooth(method = "lm", color = "black", se = TRUE) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    scale_color_manual(values = c(
+      "Both significant" = "#D73027",
+      "Aging only" = "#FC8D59", 
+      "Yamanaka only" = "#91BFDB",
+      "Neither" = "grey70"
+    )) +
+    annotate("text",
+             x = min(plot_data$logFC) * 0.8,
+             y = max(plot_data$yam_log2FC) * 0.9,
+             label = sprintf("ρ = %.3f\np = %.2e\nn = %d",
+                           cor_val, cor_test$p.value, nrow(plot_data)),
+             hjust = 0, size = 4) +
+    labs(
+      title = sprintf("Aging Signature vs Yamanaka %s", timepoint),
+      subtitle = sprintf("Aging signature: %s", aging_sig_name),
+      x = "Aging logFC (Old vs Young)",
+      y = sprintf("Yamanaka %s log2FC", timepoint),
+      color = "Significance"
+    ) +
+    theme_classic(base_size = 12) +
+    theme(legend.position = "right")
+  
+  return(p)
+}
+
+p1 <- plot_aging_correlation_improved(merged_3d, "3 Days")
+p2 <- plot_aging_correlation_improved(merged_2wks, "2 Weeks")
+
+print(p1)
+print(p2)
+
+summary(p1$data)
+summary(p2$data)
+
+
+plot_aging_correlation_improved <- function(merged, timepoint, aging_sig_name = "Combined") {
+  
+  plot_data <- merged %>%
+    mutate(
+      sig_status = case_when(
+        adj.P.Val < 0.05 & yam_padj < 0.05 ~ "Both significant",
+        adj.P.Val < 0.05 ~ "Aging only",
+        yam_padj < 0.05 ~ "Yamanaka only",
+        TRUE ~ "Neither"
+      ),
+      sig_status = factor(
+        sig_status,
+        levels = c("Both significant", "Aging only",
+                   "Yamanaka only", "Neither")
+      )
+    )
+  
+  cor_val  <- cor(plot_data$logFC, plot_data$yam_log2FC, method = "spearman")
+  cor_test <- cor.test(plot_data$logFC, plot_data$yam_log2FC, method = "spearman")
+  
+  p <- ggplot(plot_data, aes(x = logFC, y = yam_log2FC, color = sig_status)) +
+    geom_point(alpha = 0.5, size = 1.5) +
+    geom_smooth(method = "lm", color = "black", se = TRUE) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    scale_color_manual(values = c(
+      "Both significant" = "#D73027",
+      "Aging only"       = "#FC8D59",
+      "Yamanaka only"    = "#91BFDB",
+      "Neither"          = "grey70"
+    )) +
+    annotate(
+      "text",
+      x = min(plot_data$logFC) * 0.8,
+      y = max(plot_data$yam_log2FC) * 0.9,
+      label = sprintf("ρ = %.3f\np = %.2e\nn = %d",
+                      cor_val, cor_test$p.value, nrow(plot_data)),
+      hjust = 0, size = 4
+    ) +
+    labs(
+      title    = sprintf("Aging Signature vs Yamanaka %s", timepoint),
+      subtitle = sprintf("Aging signature: %s", aging_sig_name),
+      x        = "Aging logFC (Old vs Young)",
+      y        = sprintf("Yamanaka %s log2FC", timepoint),
+      color    = "Significance"
+    ) +
+    theme_classic(base_size = 12)
+  
+  return(list(plot = p, data = plot_data))
+}
+
+res_3d_for_plot   <- plot_aging_correlation_improved(merged_3d, "3 Days")
+res_2wks_for_plot <- plot_aging_correlation_improved(merged_2wks, "2 Weeks")
+
+print(res_3d_for_plot$plot)
+print(res_2wks_for_plot$plot)
+
+plot_data_3d   <- res_3d_for_plot$data
+plot_data_2wks <- res_2wks_for_plot$data
+
+plot_data_2wks %>%
+  mutate(
+    rejuvenation = sign(logFC) != sign(yam_log2FC)
+  ) %>%
+  summarise(
+    pct_rejuvenated = mean(rejuvenation) * 100
+  )
+
+plot_data_3d %>%
+  mutate(
+    direction = case_when(
+      logFC > 0 & yam_log2FC < 0 ~ "Rejuvenation",
+      logFC < 0 & yam_log2FC > 0 ~ "Rejuvenation",
+      TRUE ~ "Same direction"
+    )
+  ) %>%
+  dplyr::count(direction) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  ggplot(aes(x = direction, y = pct, fill = direction)) +
+  geom_col() +
+  labs(
+    y = "% of aging genes",
+    title = "Directional effect of Yamanaka on aging genes"
+  ) +
+  theme_classic()
+
+
+```
+
+# ============================================================================
+# 8. SAVE ALL RESULTS
+# ============================================================================
+
+```{r Save results}
+# Save comprehensive results
+aging_analysis <- list(
+  # Aging signatures (multiple versions)
+  aging_sig_combined = aging_sig_combined,
+  aging_sig_celltype_avg = aging_sig_celltype_avg,
+  aging_sig_significant = aging_sig_significant,
+  aging_results_by_celltype = results_by_celltype,
+  
+  # Comparisons with Yamanaka
+  comparison_3d = comparison_3d,
+  comparison_2wks = comparison_2wks,
+  merged_3d = merged_3d,
+  merged_2wks = merged_2wks,
+  
+  # Metadata
+  sample_distribution = sample_dist,
+  analysis_date = Sys.Date()
+)
+
+saveRDS(aging_analysis, "results/differential_expression/aging_signature_comprehensive.rds")
+write.csv(aging_sig_combined, "results/differential_expression/aging_signature_combined.csv", row.names = FALSE)
+write.csv(merged_3d, "results/differential_expression/aging_vs_yamanaka_3d.csv", row.names = FALSE)
+write.csv(merged_2wks, "results/differential_expression/aging_vs_yamanaka_2wks.csv", row.names = FALSE)
+
+cat("\n=== ANALYSIS COMPLETE ===\n")
+cat("Results saved to results/differential_expression\n")
+
+```

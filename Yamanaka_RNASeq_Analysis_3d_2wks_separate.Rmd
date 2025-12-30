@@ -700,13 +700,13 @@ To detect stronger effects, we can also set the log2FC threshold to 1, so that o
 
 ```{r strong GO effects for 3 day analysis}
 #upregulated genes
-de_genes_up_strong <- res_2wks_df |>
+de_genes_up_strong <- res_3d_df |>
   dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
 #downregulated genes
-de_genes_dn_strong <- res_2wks_df |>
+de_genes_dn_strong <- res_3d_df |>
   dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
   dplyr::pull(gene_symbol) |>
   unique()

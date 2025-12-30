@@ -1,0 +1,603 @@
+---
+title: "Yamanaka_PT_Expression_Analysis"
+output: html_document
+date: "2025-12-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+#install.packages("renv")
+##renv::init()        # Initialize project environment
+##renv::snapshot()    # Save package versions to renv.lock
+##renv::restore()     # Recreate exact environment elsewhere
+
+## Renew GitHub Token
+# You must have a GitHub Personal Access Token (PAT) stored securely.
+# If not already configured, run this once manually before using the script:
+#gitcreds_set()
+
+# # Retrieve token from the gitcreds store
+# token <- gitcreds::gitcreds_get()$password
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Set Bioc version to latest (3.22)
+#BiocManager::install(version = "3.22")
+
+#bioc_pkgs <- c(
+#  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+#  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+#)
+
+#BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+#renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+#renv::install("enrichplot")
+#renv::install("tibble")
+#renv::install("ggrepel")
+#renv::install("ggvenn")
+#renv::install("patchwork")
+#renv::install("readxl")
+#renv::install("ggVennDiagram")
+#renv::install("kableExtra")
+
+#renv::settings$bioconductor.version("3.22")
+#renv::snapshot()   # records exact versions in renv.lock
+
+
+
+library(usethis)
+library(renv)
+library(gitcreds)
+library(dplyr)
+library(stringr)
+library(DESeq2)
+library(here)
+library(fs)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(qs)
+library(enrichplot)
+library(tibble)
+library(ggrepel)
+library(ggvenn)
+library(patchwork)
+library(readxl)
+library(ggVennDiagram)
+library(kableExtra)
+
+#Use external function script
+source("scripts/plotPCA2.R")
+source("scripts/runGSEA.R")
+
+```
+
+
+Documentation of used code.
+In this script I use a subset of genes that are 1. specific for proximal tubules (Chen 2021), or 2. expressed in tubules in scRNA-Seq data (Szusztak) and perform analysis on this subset of genes.
+
+First I need to load my results files.
+
+```{r load results tables from former analyses}
+
+res_multi_df <- qread("results/differential_expression/res_multi_df.qs")
+res_3d_df <- qread("results/differential_expression/res_3d_df.qs")
+res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
+
+```
+
+Now I need to load the proximal tubular datasets.
+
+```{r load PT Expression datasets}
+PT_spec_genes <- read_excel("data/reference_data/Chen2021_SpecificPTGenes.xlsx")
+PT_spec_genes <- PT_spec_genes $Gene_name # make a vector from tibble
+
+PT_all_genes <- read_excel("data/reference_data/Park2018_OnlyPTGenes_ALL.xlsx")
+PT_all_genes_filtered <- PT_all_genes %>% filter(`PT cell percentage` >= 10)
+PT_all_genes_filtered <- PT_all_genes_filtered$Gene_name
+
+```
+
+I will subset the 2 analyses of the different time points for the PT-specific genes.
+
+```{r subset PT specific genes, as well as all PT expressed genes}
+res_3d_PT <- res_3d_df [res_3d_df$gene_symbol %in% PT_spec_genes, ] #only PT data set, from 116 of Chen 2021 paper, 110 are expressed in our data set
+
+res_2wks_PT <- res_2wks_df [res_2wks_df$gene_symbol %in% PT_spec_genes, ]
+
+res_3d_PT_all <- res_3d_df [res_3d_df$gene_symbol %in% PT_all_genes_filtered, ]
+res_2wks_PT_all <- res_2wks_df [res_2wks_df$gene_symbol %in% PT_all_genes_filtered, ]
+```
+
+# 1. PT specific genes
+## PCA analysis PT specific genes
+
+I want to start with PCA analysis.
+
+```{r Preparing PCA}
+#set "Universe" - defined as all genes that are actually expressed for 3d
+uni_genes_3d_PT_spec <- res_3d_PT |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes 3d
+de_genes_up_3d_PT_spec <- res_3d_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes 3d
+de_genes_dn_3d_PT_spec <- res_3d_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+## looking at STRONG effects for 3d, here now only with log2FoldChange of 0.5
+#upregulated genes
+de_genes_up_strong_3d_PT_spec <- res_3d_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn_strong_3d_PT_spec <- res_3d_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+### Now the same for our 2 weeks analysis
+#set "Universe" - defined as all genes that are actually expressed for 2 weeks
+uni_genes_2wks_PT_spec <- res_2wks_PT |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes 2 wks
+de_genes_up_2wks_PT_spec <- res_2wks_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes 2 wks
+de_genes_dn_2wks_PT_spec <- res_2wks_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+## looking at STRONG effects, log2FoldChange only set at 0.5!!
+#upregulated genes
+de_genes_up_strong_2wks_PT_spec <- res_2wks_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn_strong_2wks <- res_2wks_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+```
+
+
+Now I can run the PCA analysis.
+
+```{r run PCA analysis for PT specific genes 1}
+
+#for 3d timepoint
+
+#ego_up_3d_PT_spec <- enrichGO(gene = de_genes_up_3d_PT_spec,
+ #                         universe = uni_genes_3d_PT_spec,
+  #                        OrgDb = org.Mm.eg.db,
+   #                       keyType = "SYMBOL",
+    #                      ont = "BP",
+     #                     pAdjustMethod = "BH",
+      #                    pvalueCutoff = 0.05,
+       #                   qvalueCutoff = 0.2,
+        #                  readable = TRUE)
+
+#DT::datatable(head(ego_up_3d_PT_spec)) # yields no results
+
+#ego_dn_3d_PT_spec <- enrichGO(gene = de_genes_dn_3d_PT_spec,
+ #                         universe = uni_genes_3d_PT_spec,
+  #                        OrgDb = org.Mm.eg.db,
+   #                       keyType = "SYMBOL",
+    #                      ont = "BP",
+     #                     pAdjustMethod = "BH",
+      #                    pvalueCutoff = 0.05,
+       #                   qvalueCutoff = 0.2,
+        #                  readable = TRUE)
+#
+#DT::datatable(head(ego_dn_3d_PT_spec)) # yields no results
+
+#------------------------------
+
+#for 2wks timepoint
+
+
+#ego_up_2wks_PT_spec <- enrichGO(gene = de_genes_up_2wks_PT_spec,
+ #                         universe = uni_genes_2wks_PT_spec,
+  #                        OrgDb = org.Mm.eg.db,
+   #                       keyType = "SYMBOL",
+    #                      ont = "BP",
+     #                     pAdjustMethod = "BH",
+      #                    pvalueCutoff = 0.05,
+       #                   qvalueCutoff = 0.2,
+        #                  readable = TRUE)
+
+#DT::datatable(head(ego_up_2wks_PT_spec)) # yields no results
+
+#ego_dn_2wks_PT_spec <- enrichGO(gene = de_genes_dn_2wks_PT_spec,
+  #                        universe = uni_genes_2wks_PT_spec,
+ #                         OrgDb = org.Mm.eg.db,
+   #                       keyType = "SYMBOL",
+    #                      ont = "BP",
+     #                     pAdjustMethod = "BH",
+      #                    pvalueCutoff = 0.05,
+       #                   qvalueCutoff = 0.2,
+        #                  readable = TRUE)
+
+#DT::datatable(head(ego_dn_2wks_PT_spec)) # yields no results
+```
+
+The PCA analysis yielded no results, assumingly due to low gene numbers. 
+I will also try once without the divisions into up- or downregulated genes.
+
+```{r PCA regardless of direction}
+de_genes_3d_PT_spec <- res_3d_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+de_genes_2wks_PT_spec <- res_2wks_PT |>
+  dplyr::filter(!is.na(padj), padj <= 0.05) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#ego_3d_PT_spec <- enrichGO(gene = de_genes_3d_PT_spec,
+ #                         universe = uni_genes_3d_PT_spec,
+  #                        OrgDb = org.Mm.eg.db,
+   #                       keyType = "SYMBOL",
+    #                      ont = "BP",
+     #                     pAdjustMethod = "BH",
+      #                    pvalueCutoff = 0.05,
+       #                   qvalueCutoff = 0.2,
+        #                  readable = TRUE)
+
+#DT::datatable(head(ego_3d_PT_spec)) # yields no results
+
+#ego_2wks_PT_spec <- enrichGO(gene = de_genes_2wks_PT_spec,
+ #                         universe = uni_genes_2wks_PT_spec,
+  #                        OrgDb = org.Mm.eg.db,
+   #                       keyType = "SYMBOL",
+    #                      ont = "BP",
+    #                      pAdjustMethod = "BH",
+     #                     pvalueCutoff = 0.05,
+     #                     qvalueCutoff = 0.2,
+      #                    readable = TRUE)
+
+#DT::datatable(head(ego_2wks_PT_spec)) # yields no results
+
+```
+
+Also this analysis yielded no results.
+
+## Venn diagrams for PT specific gene expression
+
+Now I will look at Venn diagrams.
+
+```{r Venn diagram for upregulated genes}
+## Venn-Diagram Upregulated Genes
+gene_list_up <- list(
+  "Short term effect" = de_genes_up_3d_PT_spec,
+  "Long term effect" = de_genes_up_2wks_PT_spec
+)
+
+short <- gene_list_up[["Short term effect"]]
+long <- gene_list_up[["Long term effect"]]
+
+# Calculate regions
+only_short <- setdiff(short, long)
+only_long <- setdiff(long, short)
+both <- intersect(short, long)
+
+# Create summary table
+venn_genes <- tibble(
+  Region = c("Only Short term effect", "Only Long term effect", "Both effects"),
+  Count = c(length(only_short), length(only_long), length(both)),
+  Genes = list(only_short, only_long, both)
+ )
+
+# preparing figure, using subtitle
+venn <- ggvenn(gene_list_up, 
+               fill_color = c("skyblue", "pink"),
+               stroke_size = 0.5,
+               set_name_size = 5,
+               text_size = 4) +
+  ggtitle("Upregulated PT-specific Genes Overlap",
+          subtitle = "CrePos vs Ctrl (padj < 0.05)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10))
+
+venn
+
+# After calculating venn_genes, use this:
+dt <- DT::datatable(
+  venn_genes |> 
+    as.data.frame(),  # Keep long strings
+  options = list(
+    scrollY = "300px", 
+    scrollX = "100%", 
+    pageLength = 10,
+    autoWidth = FALSE,
+    columnDefs = list(
+      list(width = "60%", targets = 2),  # Wide genes column
+      list(className = "dt-center", targets = 1)  # Center count
+    )
+  ),
+  escape = FALSE,
+  rownames = FALSE
+)
+dt
+
+## Venn-Diagram Downregulated Genes
+gene_list_dn <- list(
+  "Short term effect" = de_genes_dn_3d_PT_spec,
+  "Long term effect" = de_genes_dn_2wks_PT_spec
+)
+
+short <- gene_list_dn[["Short term effect"]]
+long <- gene_list_dn[["Long term effect"]]
+
+# Calculate regions
+only_short <- setdiff(short, long)
+only_long <- setdiff(long, short)
+both <- intersect(short, long)
+
+# Create summary table
+venn_genes <- tibble(
+  Region = c("Only Short term effect", "Only Long term effect", "Both effects"),
+  Count = c(length(only_short), length(only_long), length(both)),
+  Genes = list(only_short, only_long, both)
+ )
+
+# using subtitle
+venn <- ggvenn(gene_list_dn, 
+               fill_color = c("skyblue", "pink"),
+               stroke_size = 0.5,
+               set_name_size = 5,
+               text_size = 4) +
+  ggtitle("Downregulated PT-specific Genes Overlap",
+          subtitle = "CrePos vs Ctrl (padj < 0.05)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10))
+
+venn
+
+# After calculating venn_genes, use this:
+dt <- DT::datatable(
+  venn_genes |> 
+    as.data.frame(),  # Keep long strings
+  options = list(
+    scrollY = "300px", 
+    scrollX = "100%", 
+    pageLength = 10,
+    autoWidth = FALSE,
+    columnDefs = list(
+      list(width = "60%", targets = 2),  # Wide genes column
+      list(className = "dt-center", targets = 1)  # Center count
+    )
+  ),
+  escape = FALSE,
+  rownames = FALSE
+)
+dt
+
+```
+
+# 2. all PT - expressed genes (Park, Szusztak 2018)
+
+```{r Preparing PCA for all PT expressed genes}
+#set "Universe" - defined as all genes that are actually expressed for 3d
+uni_genes_3d_PT_all <- res_3d_PT_all |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes 3d
+de_genes_up_3d_PT_all <- res_3d_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes 3d
+de_genes_dn_3d_PT_all <- res_3d_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+## looking at STRONG effects for 3d, here now only with log2FoldChange of 0.5
+#upregulated genes
+de_genes_up_strong_3d_PT_all <- res_3d_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn_strong_3d_PT_all <- res_3d_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+### Now the same for our 2 weeks analysis
+#set "Universe" - defined as all genes that are actually expressed for 2 weeks
+uni_genes_2wks_PT_all <- res_2wks_PT_all |>
+  dplyr::filter(!is.na(padj)) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#upregulated genes 2 wks
+de_genes_up_2wks_PT_all <- res_2wks_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes 2 wks
+de_genes_dn_2wks_PT_all <- res_2wks_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < 0) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+## looking at STRONG effects, log2FoldChange only set at 0.5!!
+#upregulated genes
+de_genes_up_strong_2wks_PT_all <- res_2wks_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+#downregulated genes
+de_genes_dn_strong_2wks_all <- res_2wks_PT_all |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
+  dplyr::pull(gene_symbol) |>
+  unique()
+
+
+```
+
+Now I can run the PCA analysis.
+
+```{r run PCA analysis for PT specific genes}
+
+#for 3d timepoint
+
+ego_up_3d_PT_all <- enrichGO(gene = de_genes_up_3d_PT_all,
+                          universe = uni_genes_3d_PT_all,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+DT::datatable(head(ego_up_3d_PT_all)) # yields no results
+
+ego_dn_3d_PT_all <- enrichGO(gene = de_genes_dn_3d_PT_all,
+                          universe = uni_genes_3d_PT_all,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+DT::datatable(head(ego_dn_3d_PT_all)) 
+
+#Visualize
+
+dotplot(ego_dn_3d_PT_all, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes after 3 days")
+
+
+#------------------------------
+
+#for 2wks timepoint
+
+
+ego_up_2wks_PT_all <- enrichGO(gene = de_genes_up_2wks_PT_all,
+                          universe = uni_genes_2wks_PT_all,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+DT::datatable(head(ego_up_2wks_PT_all)) 
+
+ego_dn_2wks_PT_all <- enrichGO(gene = de_genes_dn_2wks_PT_all,
+                          universe = uni_genes_2wks_PT_all,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+DT::datatable(head(ego_dn_2wks_PT_all)) 
+
+#Visualize
+dotplot(ego_up_2wks_PT_all, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes after 2 weeks")
+dotplot(ego_dn_2wks_PT_all, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes after 2 weeks")
+
+```
+# Conclusion
+
+#### For 1. PT-specifically expressed genes: 
+massive downregulation (36 genes vs only 3 upregulated) indicates substantial loss of proximal tubule identity.
+Lost PT transport functions:
+•	Phosphate reabsorption: Slc34a1, Slc34a3 (sodium-phosphate cotransporters - hallmark PT markers)
+•	Glucose reabsorption: Slc5a2 (SGLT2 - the primary glucose transporter)
+•	Amino acid transport: Slc6a18, Slc7a7, Slc7a13
+•	Organic anion/cation transport: Slc22a6, Slc22a12 (OAT1, OAT3 family)
+•	Other solutes: Slc17a3, Slc27a2
+
+Lost metabolic specialization:
+•	Gluconeogenesis: Fbp1, Pck1 precursor, Aldob
+•	Amino acid metabolism: Pah (phenylalanine hydroxylase), Ass1 (urea cycle)
+•	Fatty acid oxidation: Amacr, Acsm family (early signs)
+•	Xenobiotic metabolism: Multiple Cyp enzymes (2j13, 4b1, 2e1), Ugt2b38, Ces1f
+This pattern is consistent with reprogramming-induced metabolic rewiring - cells are shifting away from the highly specialized, energy-intensive functions of differentiated PT cells.
+
+After 2 weeks there is an adaptive metabolic reprogramming. Possibly lasting tubular damage (persistently downregulated genes).
+
+
+#### For 2. Comparison to genes that are all expressed in proximal tubules: 
+After 3 days, PT cells are temporarily downregulating their baseline metabolic/transport programs.
+
+This aligns with an early “dedifferentiation-like” response to Yamanaka factor induction — the cells are starting to loosen their mature identity without yet activating “youthful” programs.
+
+For 2 week timepoint:
+- Translation at pre/post-synapse, cytoplasmic translation
+
+- Oxidative phosphorylation (OXPHOS)
+
+- Aldehyde metabolic process
+
+These are indicative of enhanced protein synthesis and energy metabolism, i.e., the cells are functionally revving up.
+
+Interpretation: By 2 weeks, PT cells show a rejuvenation-like signature, with increased translational and mitochondrial programs.
+
+
+For downregulation: Top GO terms:
+
+These GO terms are largely developmental/morphogenetic programs, not core PT metabolic programs.
+
+Interpretation: At 2 weeks, PT cells are reducing developmental signaling, possibly suppressing “non-PT-specific” programs or noise, while rejuvenation/metabolic functions take over.
+
+
+## However
+Even though the PT-specific 2-week upregulated GO terms are OXPHOS/translation, this does not necessarily mean rejuvenation in the broader context:
+
+These are PT-specific genes only, not all genes.
+
+Global 2-week results showed enhanced genes corresponding to pro-aging processes (maybe stress response, inflammation, ECM remodeling).
+
+So what looks like “rejuvenation” in PT-specific metabolism may coexist with overall pro-aging trends in other pathways or cell types.

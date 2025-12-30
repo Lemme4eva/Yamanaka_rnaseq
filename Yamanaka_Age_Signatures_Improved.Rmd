@@ -1,0 +1,753 @@
+---
+title: "Yamanaka_Age_Signatures_Improved"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("renv")
+##renv::init()        # Initialize project environment
+##renv::snapshot()    # Save package versions to renv.lock
+##renv::restore()     # Recreate exact environment elsewhere
+
+## Renew GitHub Token
+# You must have a GitHub Personal Access Token (PAT) stored securely.
+# If not already configured, run this once manually before using the script:
+#gitcreds_set()
+
+# # Retrieve token from the gitcreds store
+# token <- gitcreds::gitcreds_get()$password
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Set Bioc version to latest (3.22)
+#BiocManager::install(version = "3.22")
+
+#bioc_pkgs <- c(
+#  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+#  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+#)
+
+#BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+#renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+#renv::install("enrichplot")
+#renv::install("zellkonverter", "SingleCellExperiment")
+#renv::install("scuttle", "scater")
+#renv::install("edgeR", "limma", "GSVA")
+#renv::install("matrixStats")
+#renv::install("tidyr")
+#renv::settings$bioconductor.version("3.22")
+#renv::snapshot()   # records exact versions in renv.lock
+
+library(usethis)
+library(renv)
+library(gitcreds)
+library(dplyr)
+library(stringr)
+library(DESeq2)
+library(here)
+library(fs)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(qs)
+library(enrichplot)
+library(tibble)
+library(ggrepel)
+
+library(zellkonverter)  # reads h5ad
+library(SingleCellExperiment)
+library(scuttle) # aggregateAcrossCells
+library(scater)
+library(edgeR)
+library(limma)
+library(GSVA)
+library(Matrix)
+library(matrixStats)
+library(readxl)
+#library(tidyr)
+
+
+#Use external function script
+source("scripts/plotPCA2.R")
+source("scripts/runGSEA.R")
+
+```
+
+## ============================================================================
+# IMPROVED TABULA MURIS AGING SIGNATURE ANALYSIS
+### Key improvements: proper statistical testing, better normalization, 
+### filtering low-expressed genes, and more robust pseudobulk approach
+## ============================================================================
+
+
+## ============================================================================
+# 1. Load data
+## ============================================================================
+```{r load Tabula muris kidney facs data}
+sce <- zellkonverter::readH5AD("data/processed_data/counts_data/Kidney_facs_tabulamuris.h5ad")
+
+res_3d_df <- qread("results/differential_expression/res_3d_df.qs")
+res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
+
+PT_all_genes <- read_excel("data/reference_data/Park2018_OnlyPTGenes_ALL.xlsx")
+PT_all_genes_filtered <- PT_all_genes %>% filter(`PT cell percentage` >= 10)
+PT_all_genes_filtered <- PT_all_genes_filtered$Gene_name
+res_3d_PT_all <- res_3d_df [res_3d_df$gene_symbol %in% PT_all_genes_filtered, ]
+res_2wks_PT_all <- res_2wks_df [res_2wks_df$gene_symbol %in% PT_all_genes_filtered, ]
+```
+
+## ============================================================================
+# 2. Cell type processing
+## ============================================================================
+```{r Cell type processing}
+# Check what cell types are available
+cat("=== Available cell types ===\n")
+print(table(colData(sce)$cluster_names))
+
+# Merge proximal tubule subtypes (your approach was good)
+sce$cluster_names_merged <- sce$cluster_names
+sce$cluster_names_merged <- gsub(".*proximal tubule.*", "Proximal Tubule", 
+                                  sce$cluster_names_merged, ignore.case = TRUE)
+sce$cell_type <- sce$cluster_names_merged
+
+# Define epithelial types (consider adding more if available)
+epi_types <- c(
+  "Proximal Tubule",
+  "0_kidney collecting duct epithelial cell",
+  "4_kidney loop of Henle ascending limb epithelial cell",
+  "7_kidney collecting duct principal cell"
+)
+
+# Subset to epithelial cells
+sce_epi <- sce[, sce$cell_type %in% epi_types]
+
+cat(sprintf("\n=== Epithelial subset ===\n"))
+cat(sprintf("Total cells: %d\n", ncol(sce_epi)))
+print(table(sce_epi$cell_type, sce_epi$age))
+```
+
+## ============================================================================
+# 3. Pseudobulk creation
+### Key improvements: 
+### - Check for sufficient replicates per group
+### - Filter out genes with very low counts
+### - Ensure proper sample balance
+## ============================================================================
+
+```{r Pseudobulk creation}
+# Create pseudobulk: mouse × age × cell type
+pb <- aggregateAcrossCells(
+  x = sce_epi,
+  ids = DataFrame(
+    mouse = sce_epi$mouse.id,
+    age   = sce_epi$age,
+    type  = sce_epi$cell_type
+  ),
+  use.assay.type = "X"
+)
+
+# Create informative column names
+colnames(pb) <- paste(pb$type, pb$age, pb$mouse, sep = "_")
+
+cat("\n=== Pseudobulk summary ===\n")
+cat(sprintf("Total pseudobulk samples: %d\n", ncol(pb)))
+cat(sprintf("Genes: %d\n", nrow(pb)))
+
+# Check sample distribution
+sample_dist <- colData(pb) %>%
+  as.data.frame() %>%
+  group_by(type, age) %>%
+  summarise(n_mice = n(), .groups = "drop")
+
+cat("\n=== Samples per cell type and age ===\n")
+print(sample_dist)
+
+# IMPORTANT: Check if we have enough replicates for statistical testing
+min_replicates <- sample_dist %>%
+  group_by(type) %>%
+  summarise(min_n = min(n_mice)) %>%
+  pull(min_n)
+
+if (any(min_replicates < 2)) {
+  warning("Some cell types have fewer than 2 replicates per age group. Results may be unreliable.")
+}
+
+```
+
+
+## ============================================================================
+# 4. Differential expression analysis
+### Key improvements:
+### - Filter low-expressed genes BEFORE analysis
+### - Use limma-voom for better variance modeling
+### - Proper design matrix with cell type as covariate
+### - Extract results with proper multiple testing correction
+## ============================================================================
+
+```{r DE Analysis}
+# Prepare data
+counts <- assay(pb, "X")
+meta <- colData(pb) %>% as.data.frame()
+
+# Make age a factor with 3m as reference
+meta$age <- factor(meta$age, levels = c("3m", "24m"))
+meta$type <- factor(meta$type)
+
+# Create DGEList
+dge <- DGEList(counts = counts, samples = meta)
+
+# CRITICAL: Filter lowly expressed genes
+# Keep genes with at least 1 CPM in at least 2 samples (minimum group size)
+keep <- filterByExpr(dge, min.count = 2, min.total.count = 10)
+cat(sprintf("\n=== Gene filtering ===\n"))
+cat(sprintf("Genes before filtering: %d\n", nrow(dge)))
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+cat(sprintf("Genes after filtering: %d\n", nrow(dge)))
+
+# assuming dge$samples$group is defined (from Perplexity AI, but yields the same gene numbers as having min.count=10 and min.total.count=15)
+#keep <- filterByExpr(dge, group = dge$samples$group)
+#dge  <- dge[keep, , keep.lib.sizes = FALSE]
+
+# Calculate normalization factors
+dge <- calcNormFactors(dge, method = "TMM")
+
+# Check library sizes
+cat("\n=== Library size summary ===\n")
+print(summary(dge$samples$lib.size))
+```
+
+## ============================================================================
+### OPTION A: Cell-type-specific analysis - does not yield enough results per cell type
+## ============================================================================
+
+
+```{r Cell-type specific analysis}
+cat("\n=== Running cell-type-specific DE analysis ===\n")
+
+# List to store results
+results_by_celltype <- list()
+
+for (ct in unique(meta$type)) {
+  cat(sprintf("\nAnalyzing: %s\n", ct))
+  
+  # Subset to this cell type
+  idx <- meta$type == ct
+  dge_ct <- dge[, idx]
+  meta_ct <- meta[idx, ]
+  
+  # Check if we have both age groups
+  if (length(unique(meta_ct$age)) < 2) {
+    cat(sprintf("  Skipping - only one age group present\n"))
+    next
+  }
+  
+  # Check sample sizes
+  n_young <- sum(meta_ct$age == "3m")
+  n_old <- sum(meta_ct$age == "24m")
+  cat(sprintf("  Young (3m): %d mice, Old (24m): %d mice\n", n_young, n_old))
+  
+  if (n_young < 2 || n_old < 2) {
+    cat(sprintf("  Skipping - insufficient replicates\n"))
+    next
+  }
+  
+  # Design matrix for this cell type
+  design_ct <- model.matrix(~ age, data = meta_ct)
+  
+  # Voom transformation with quality weights
+  v <- voomWithQualityWeights(dge_ct, design = design_ct, plot = FALSE)
+  
+  # Fit linear model
+  fit <- lmFit(v, design_ct)
+  fit <- eBayes(fit, robust = TRUE)
+  
+  # Extract results for age effect (Old vs Young)
+  tt <- topTable(fit, coef = "age24m", number = Inf, sort.by = "none")
+  
+  # Add gene symbols
+  tt$gene <- rownames(tt)
+  tt$cell_type <- ct
+  
+  # Store results
+  results_by_celltype[[ct]] <- tt
+  
+  cat(sprintf("  Significant genes (FDR < 0.05): %d\n", sum(tt$adj.P.Val < 0.05)))
+  cat(sprintf("  Up in aging: %d, Down in aging: %d\n",
+              sum(tt$adj.P.Val < 0.05 & tt$logFC > 0),
+              sum(tt$adj.P.Val < 0.05 & tt$logFC < 0)))
+}
+
+# Combine results from all cell types
+aging_results_celltype <- bind_rows(results_by_celltype)
+```
+
+
+## ============================================================================
+# OPTION B: Combined analysis across all epithelial cells
+### Better for overall aging signature
+## ============================================================================
+
+```{r Combined analysis across all epithelial cells}
+cat("\n=== Running combined epithelial analysis ===\n")
+
+# Design matrix: control for cell type differences
+design_combined <- model.matrix(~ 0 + type + age, data = meta)
+colnames(design_combined) <- gsub("type", "", colnames(design_combined))
+
+# Voom transformation
+v_combined <- voomWithQualityWeights(dge, design = design_combined, plot = TRUE)
+
+# Fit model
+fit_combined <- lmFit(v_combined, design_combined)
+fit_combined <- eBayes(fit_combined, robust = TRUE)
+
+# Extract aging effect (age24m coefficient)
+aging_combined <- topTable(fit_combined, coef = "age24m", number = Inf, sort.by = "none")
+aging_combined$gene <- rownames(aging_combined)
+
+cat(sprintf("\n=== Combined epithelial analysis results ===\n"))
+cat(sprintf("Significant genes (FDR < 0.05): %d\n", sum(aging_combined$adj.P.Val < 0.05)))
+cat(sprintf("Up in aging: %d, Down in aging: %d\n",
+            sum(aging_combined$adj.P.Val < 0.05 & aging_combined$logFC > 0),
+            sum(aging_combined$adj.P.Val < 0.05 & aging_combined$logFC < 0)))
+
+```
+
+## ============================================================================
+# 5. Create aging signature
+## Options:
+### A. Average logFC across cell types (weighted by significance)
+### B. Use combined analysis logFC
+### C. Use only significant genes
+## ============================================================================
+
+```{r Create aging signature}
+# Option A: Average across cell types
+aging_sig_celltype_avg <- aging_results_celltype %>%
+  group_by(gene) %>%
+  summarise(
+    logFC = mean(logFC, na.rm = TRUE),
+    avg_pval = mean(P.Value, na.rm = TRUE),
+    n_celltypes = n(),
+    .groups = "drop"
+  )
+
+# Option B: Use combined analysis (RECOMMENDED - more statistical power)
+aging_sig_combined <- aging_combined %>%
+  select(gene, logFC, P.Value, adj.P.Val, AveExpr)
+
+# Option C: Only use significant genes for signature
+aging_sig_significant <- aging_combined %>%
+  filter(adj.P.Val < 0.05) %>%
+  select(gene, logFC, P.Value, adj.P.Val, AveExpr)
+
+cat(sprintf("\n=== Aging signature sizes ===\n"))
+cat(sprintf("Cell-type averaged: %d genes\n", nrow(aging_sig_celltype_avg)))
+cat(sprintf("Combined analysis: %d genes\n", nrow(aging_sig_combined)))
+cat(sprintf("Significant only: %d genes\n", nrow(aging_sig_significant)))
+
+
+```
+## ============================================================================
+# 6. Comparison with Yamanaka data
+## Key improvements:
+### - Multiple testing correction awareness
+### - Filter by expression level overlap
+### - Weighted correlations by significance
+## ============================================================================
+
+```{r Comparison with Yamanaka data}
+compare_with_yamanaka <- function(aging_sig, yamanaka_res, timepoint_name) {
+  
+  # Merge
+  merged <- aging_sig %>%
+    inner_join(
+      yamanaka_res %>% 
+        dplyr::select(gene = gene_symbol, 
+                      yam_log2FC = log2FoldChange,
+                      yam_padj   = padj,
+                      yam_baseMean = baseMean),
+      by = "gene"
+    ) %>%
+    dplyr::filter(!is.na(logFC) & !is.na(yam_log2FC))
+  
+  # Basic correlation
+  cor_all  <- cor(merged$logFC, merged$yam_log2FC, method = "spearman")
+  cor_test <- cor.test(merged$logFC, merged$yam_log2FC, method = "spearman")
+  
+  # Weighted correlation – robust to NA / all-zero weights
+  cor_weighted <- NA
+  if ("adj.P.Val" %in% colnames(merged)) {
+    
+    merged_w <- merged %>%
+      dplyr::filter(!is.na(adj.P.Val), !is.na(yam_padj)) %>%
+      dplyr::mutate(weight = (1 - adj.P.Val) * (1 - yam_padj))
+    
+    if (nrow(merged_w) > 1 && all(merged_w$weight >= 0) && sum(merged_w$weight) > 0) {
+      cor_weighted <- cov.wt(
+        merged_w[, c("logFC", "yam_log2FC")],
+        wt  = merged_w$weight,
+        cor = TRUE
+      )$cor[1, 2]
+    }
+  }
+  
+  # Correlation for Yamanaka-significant genes
+  merged_sig_yam <- merged %>% dplyr::filter(!is.na(yam_padj), yam_padj < 0.05)
+  cor_sig_yam <- if (nrow(merged_sig_yam) > 10) {
+    cor(merged_sig_yam$logFC, merged_sig_yam$yam_log2FC, method = "spearman")
+  } else NA
+  
+  # Correlation for aging-significant genes
+  cor_sig_aging <- NA
+  if ("adj.P.Val" %in% colnames(merged)) {
+    merged_sig_aging <- merged %>% dplyr::filter(!is.na(adj.P.Val), adj.P.Val < 0.05)
+    if (nrow(merged_sig_aging) > 10) {
+      cor_sig_aging <- cor(merged_sig_aging$logFC, merged_sig_aging$yam_log2FC, 
+                           method = "spearman")
+    }
+  }
+  
+  # Print summary
+  cat(sprintf("\n=== %s comparison with aging signature ===\n", timepoint_name))
+  cat(sprintf("Overlapping genes: %d\n", nrow(merged)))
+  cat(sprintf("Spearman correlation (all): %.4f (p = %.2e)\n", 
+              cor_all, cor_test$p.value))
+  if (!is.na(cor_weighted)) {
+    cat(sprintf("Weighted correlation: %.4f\n", cor_weighted))
+  } else {
+    cat("Weighted correlation: NA (insufficient or invalid weights)\n")
+  }
+  if (!is.na(cor_sig_yam)) {
+    cat(sprintf("Correlation (Yamanaka-sig genes): %.4f (n=%d)\n", 
+                cor_sig_yam, nrow(merged_sig_yam)))
+  }
+  if (!is.na(cor_sig_aging)) {
+    cat(sprintf("Correlation (Aging-sig genes): %.4f (n=%d)\n", 
+                cor_sig_aging, nrow(merged_sig_aging)))
+  }
+  
+  # Anti-aging score
+  if ("adj.P.Val" %in% colnames(merged)) {
+    aging_sig_genes <- merged %>% dplyr::filter(!is.na(adj.P.Val), adj.P.Val < 0.05)
+    if (nrow(aging_sig_genes) > 0) {
+      reversed <- aging_sig_genes %>%
+        dplyr::mutate(is_reversed = sign(logFC) != sign(yam_log2FC))
+      pct_reversed <- mean(reversed$is_reversed) * 100
+      cat(sprintf("Aging-significant genes reversed: %.1f%% (%d/%d)\n",
+                  pct_reversed, sum(reversed$is_reversed), nrow(reversed)))
+    }
+  }
+  
+  invisible(list(
+    merged        = merged,
+    cor_all       = cor_all,
+    cor_weighted  = cor_weighted,
+    cor_sig_yam   = cor_sig_yam,
+    cor_sig_aging = cor_sig_aging,
+    p_value       = cor_test$p.value
+  ))
+}
+
+
+# Compare with both timepoints using combined aging signature 
+#comparison_3d <- compare_with_yamanaka(aging_sig_combined, res_3d_df, "3 Days")
+#comparison_2wks <- compare_with_yamanaka(aging_sig_combined, res_2wks_df, "2 Weeks")
+
+# Compare our PT all subset with both timepoints using combined aging signature 
+comparison_3d <- compare_with_yamanaka(aging_sig_combined, res_3d_PT_all, "3 Days")
+comparison_2wks <- compare_with_yamanaka(aging_sig_combined, res_2wks_PT_all, "2 Weeks")
+
+# Store merged data for plotting
+merged_3d <- comparison_3d$merged
+merged_2wks <- comparison_2wks$merged
+
+```
+
+
+## ============================================================================
+# 7. Visualization
+## ============================================================================
+
+```{r Visualization}
+# Function for better correlation plots
+plot_aging_correlation_improved <- function(merged, timepoint, aging_sig_name = "Combined") {
+  
+  # Color by significance in both studies
+  plot_data <- merged %>%
+    mutate(
+      sig_status = case_when(
+        adj.P.Val < 0.05 & yam_padj < 0.05 ~ "Both significant",
+        adj.P.Val < 0.05 ~ "Aging only",
+        yam_padj < 0.05 ~ "Yamanaka only",
+        TRUE ~ "Neither"
+      ),
+      sig_status = factor(sig_status, 
+                         levels = c("Both significant", "Aging only", 
+                                   "Yamanaka only", "Neither"))
+    )
+  
+  # Calculate correlation for plot annotation
+  cor_val <- cor(plot_data$logFC, plot_data$yam_log2FC, method = "spearman")
+  cor_test <- cor.test(plot_data$logFC, plot_data$yam_log2FC, method = "spearman")
+  
+  p <- ggplot(plot_data, aes(x = logFC, y = yam_log2FC, color = sig_status)) +
+    geom_point(alpha = 0.5, size = 1.5) +
+    geom_smooth(method = "lm", color = "black", se = TRUE) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    scale_color_manual(values = c(
+      "Both significant" = "#D73027",
+      "Aging only" = "#FC8D59", 
+      "Yamanaka only" = "#91BFDB",
+      "Neither" = "grey70"
+    )) +
+    annotate("text",
+             x = min(plot_data$logFC) * 0.8,
+             y = max(plot_data$yam_log2FC) * 0.9,
+             label = sprintf("ρ = %.3f\np = %.2e\nn = %d",
+                           cor_val, cor_test$p.value, nrow(plot_data)),
+             hjust = 0, size = 4) +
+    labs(
+      title = sprintf("Aging Signature vs Yamanaka %s", timepoint),
+      subtitle = sprintf("Aging signature: %s", aging_sig_name),
+      x = "Aging logFC (Old vs Young)",
+      y = sprintf("Yamanaka %s log2FC", timepoint),
+      color = "Significance"
+    ) +
+    theme_classic(base_size = 12) +
+    theme(legend.position = "right")
+  
+  return(p)
+}
+
+p1 <- plot_aging_correlation_improved(merged_3d, "3 Days")
+p2 <- plot_aging_correlation_improved(merged_2wks, "2 Weeks")
+
+print(p1)
+print(p2)
+
+summary(p1$data)
+summary(p2$data)
+
+# 1. Reversal rate for aging-significant genes (1053 set)
+aging_sig <- p2$data %>% filter(adj.P.Val < 0.05)
+pct_reversed_3d <- mean(sign(p1$data$logFC) != sign(p1$data$yam_log2FC)) * 100
+pct_reversed_2w <- mean(sign(aging_sig$logFC) != sign(aging_sig$yam_log2FC)) * 100
+
+cat("3d reversal:", round(pct_reversed_3d, 1), "%")
+cat("2w reversal:", round(pct_reversed_2w, 1), "%")
+
+
+```
+
+## ============================================================================
+# 8. Save all results
+## ============================================================================
+
+```{r Save results}
+# Save comprehensive results
+aging_analysis <- list(
+  # Aging signatures (multiple versions)
+  aging_sig_combined = aging_sig_combined,
+  aging_sig_celltype_avg = aging_sig_celltype_avg,
+  aging_sig_significant = aging_sig_significant,
+  aging_results_by_celltype = results_by_celltype,
+  
+  # Comparisons with Yamanaka
+  comparison_3d = comparison_3d,
+  comparison_2wks = comparison_2wks,
+  merged_3d = merged_3d,
+  merged_2wks = merged_2wks,
+  
+  # Metadata
+  sample_distribution = sample_dist,
+  analysis_date = Sys.Date()
+)
+
+saveRDS(aging_analysis, "results/differential_expression/aging_signature_comprehensive.rds")
+write.csv(aging_sig_combined, "results/differential_expression/aging_signature_combined.csv", row.names = FALSE)
+write.csv(merged_3d, "results/differential_expression/aging_vs_yamanaka_3d.csv", row.names = FALSE)
+write.csv(merged_2wks, "results/differential_expression/aging_vs_yamanaka_2wks.csv", row.names = FALSE)
+
+
+```
+
+## =================================================================================
+# 9. Analyze Aging- Reversed and - Enhanced Genes
+## =================================================================================
+
+
+```{r aging-significant genes}
+# 3 days analysis
+# Aging-significant genes
+aging_changed_3d <- merged_3d %>% filter(adj.P.Val < 0.05)
+
+# Classify
+aging_changed_3d <- aging_changed_3d %>%
+  mutate(effect = case_when(
+    sign(logFC) != sign(yam_log2FC) ~ "Reversed",     # reversed
+    sign(logFC) == sign(yam_log2FC) ~ "Enhanced",     # pro-aging / amplified
+    TRUE ~ "Other"
+  ))
+
+# Extract gene lists
+reversed_genes_3d <- aging_changed_3d %>% filter(effect == "Reversed") %>% pull(gene)
+enhanced_genes_3d <- aging_changed_3d %>% filter(effect == "Enhanced") %>% pull(gene)
+
+length(reversed_genes_3d)
+length(enhanced_genes_3d)
+
+
+#GO Term analysis
+# Genes in your pseudobulk (PB)
+pb_genes <- rownames(pb)
+
+# Genes in Yamanaka 2-week dataset
+yamanaka_genes <- res_3d_df$gene_symbol  # adjust column name if different
+
+# Create the universe for GO/pathway analysis
+gene_universe <- intersect(pb_genes, yamanaka_genes)
+
+length(gene_universe)
+# This tells you how many genes are in your universe
+
+ego_result_reversed_3d <- enrichGO(gene = reversed_genes_3d,
+                          universe = gene_universe,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+
+DT::datatable(head(ego_result_reversed_3d)) # shows all genes that are now enriched for the pathways and how many there are
+
+ego_result_enhanced_3d <- enrichGO(
+  gene = enhanced_genes_3d,
+  universe = gene_universe,
+  OrgDb = org.Mm.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable = TRUE
+)
+
+DT::datatable(head(ego_result_enhanced_3d))
+
+#Visualize
+dotplot(ego_result_reversed_3d, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes : Dotplot")
+dotplot(ego_result_enhanced_3d, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes : Dotplot")
+
+
+# Convert to a data frame
+reversed_df_3d <- as.data.frame(ego_result_reversed_3d)
+enhanced_df_3d <- as.data.frame(ego_result_enhanced_3d)
+
+# View top 10 rows
+head(reversed_df_3d, 10)
+head(enhanced_df_3d, 10)
+
+#=============================================
+# 2 weeks analysis
+
+# Aging-significant genes
+aging_changed_2wks <- merged_2wks %>% filter(adj.P.Val < 0.05)
+
+# Classify
+aging_changed_2wks <- aging_changed_2wks %>%
+  mutate(effect = case_when(
+    sign(logFC) != sign(yam_log2FC) ~ "Reversed",     # reversed
+    sign(logFC) == sign(yam_log2FC) ~ "Enhanced",     # pro-aging / amplified
+    TRUE ~ "Other"
+  ))
+
+# Extract gene lists
+reversed_genes_2wks <- aging_changed_2wks %>% filter(effect == "Reversed") %>% pull(gene)
+enhanced_genes_2wks <- aging_changed_2wks %>% filter(effect == "Enhanced") %>% pull(gene)
+
+length(reversed_genes_2wks)
+length(enhanced_genes_2wks)
+
+
+#GO Term analysis
+# Genes in your pseudobulk (PB)
+pb_genes <- rownames(pb)
+
+# Genes in Yamanaka 2-week dataset
+yamanaka_genes <- res_2wks_df$gene_symbol  # adjust column name if different
+
+# Create the universe for GO/pathway analysis
+gene_universe <- intersect(pb_genes, yamanaka_genes)
+
+length(gene_universe)
+# This tells you how many genes are in your universe
+
+ego_result_reversed_2wks <- enrichGO(gene = reversed_genes_2wks,
+                          universe = gene_universe,
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2,
+                          readable = TRUE)
+
+
+DT::datatable(head(ego_result_reversed_2wks)) # shows all genes that are now enriched for the pathways and how many there are
+
+ego_result_enhanced_2wks <- enrichGO(
+  gene = enhanced_genes_2wks,
+  universe = gene_universe,
+  OrgDb = org.Mm.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable = TRUE
+)
+
+DT::datatable(head(ego_result_enhanced_2wks))
+
+#Visualize
+dotplot(ego_result_reversed_2wks, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Upregulated Genes : Dotplot")
+dotplot(ego_result_enhanced_2wks, showCategory=10) +
+  ggtitle("GO Enrichment Analysis - Downregulated Genes : Dotplot")
+
+
+# Convert to a data frame
+reversed_df_2wks <- as.data.frame(ego_result_reversed_2wks)
+enhanced_df_2wks <- as.data.frame(ego_result_enhanced_2wks)
+
+# View top 10 rows
+head(reversed_df_2wks, 10)
+head(enhanced_df_2wks, 10)
+
+
+cat("\n=== ANALYSIS COMPLETE ===\n")
+cat("Results saved to results/differential_expression\n")
+
+```
+
+# Conclusion
+
+Interestingly, the genes which are reversed in terms of aging behaviour after Yamanaka induction, are short-term protein synthesis / neuronal genes (might reflect epithelial processes), and enhanced (pro-aging) genes are especially mitochondrial related. However, in the long-term (after 2 weeks) analysis, it is the opposite. Here, mitochodrial genes show rather a reversed expression, and a mixture of protein synthesis / some mitochondrial processes show a pro-aging effect.
+
+Importantly, all these effects are quite small. Most aging-related genes are not affected by Yamanaka induction. But - the 2 week timepoint rather points toward a pro-aging effect!
+
+
