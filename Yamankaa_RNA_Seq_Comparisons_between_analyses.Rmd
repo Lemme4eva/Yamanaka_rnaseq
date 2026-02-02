@@ -485,7 +485,7 @@ ego_result_up_consist <- enrichGO(gene = genes_up_consist,
                           readable = TRUE)
 
 
-DT::datatable(head(ego_result_up_consist)) # yields no results
+DT::datatable(head(ego_result_up_consist)) 
 
 ego_result_dn_consist <- enrichGO(
   gene = genes_dn_consist,
@@ -500,6 +500,12 @@ ego_result_dn_consist <- enrichGO(
 )
 
 DT::datatable(head(ego_result_dn_consist))
+
+dotplot(ego_result_up_consist, showCategory=10) +
+  ggtitle("GO - Consistently upregulated genes")
+
+dotplot(ego_result_dn_consist, showCategory=10) +
+  ggtitle("GO - Consistently downregulated genes")
 
 ```
 

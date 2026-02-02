@@ -95,8 +95,8 @@ res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
 Now I need to load the proximal tubular datasets.
 
 ```{r load PT Expression datasets}
-PT_spec_genes <- read_excel("data/reference_data/Chen2021_SpecificPTGenes.xlsx")
-PT_spec_genes <- PT_spec_genes $Gene_name # make a vector from tibble
+PT_spec_genes <- read.csv("results/cell-specific analyses/Top200_PT_specific_genes_summary.csv")
+PT_spec_genes <- PT_spec_genes$Gene_symbol# make a vector from tibble
 
 PT_all_genes <- read_excel("data/reference_data/Park2018_OnlyPTGenes_ALL.xlsx")
 PT_all_genes_filtered <- PT_all_genes %>% filter(`PT cell percentage` >= 10)
@@ -208,46 +208,46 @@ Now I can run the PCA analysis.
 
 #DT::datatable(head(ego_up_3d_PT_spec)) # yields no results
 
-#ego_dn_3d_PT_spec <- enrichGO(gene = de_genes_dn_3d_PT_spec,
- #                         universe = uni_genes_3d_PT_spec,
-  #                        OrgDb = org.Mm.eg.db,
-   #                       keyType = "SYMBOL",
-    #                      ont = "BP",
-     #                     pAdjustMethod = "BH",
-      #                    pvalueCutoff = 0.05,
-       #                   qvalueCutoff = 0.2,
-        #                  readable = TRUE)
-#
-#DT::datatable(head(ego_dn_3d_PT_spec)) # yields no results
-
-#------------------------------
+# ego_dn_3d_PT_spec <- enrichGO(gene = de_genes_dn_3d_PT_spec,
+#                           universe = uni_genes_3d_PT_spec,
+#                           OrgDb = org.Mm.eg.db,
+#                           keyType = "SYMBOL",
+#                           ont = "BP",
+#                           pAdjustMethod = "BH",
+#                           pvalueCutoff = 0.05,
+#                           qvalueCutoff = 0.2,
+#                           readable = TRUE)
+# 
+# DT::datatable(head(ego_dn_3d_PT_spec)) # yields no results
+# 
+# #------------------------------
 
 #for 2wks timepoint
 
 
-#ego_up_2wks_PT_spec <- enrichGO(gene = de_genes_up_2wks_PT_spec,
- #                         universe = uni_genes_2wks_PT_spec,
-  #                        OrgDb = org.Mm.eg.db,
-   #                       keyType = "SYMBOL",
-    #                      ont = "BP",
-     #                     pAdjustMethod = "BH",
-      #                    pvalueCutoff = 0.05,
-       #                   qvalueCutoff = 0.2,
-        #                  readable = TRUE)
-
-#DT::datatable(head(ego_up_2wks_PT_spec)) # yields no results
-
-#ego_dn_2wks_PT_spec <- enrichGO(gene = de_genes_dn_2wks_PT_spec,
-  #                        universe = uni_genes_2wks_PT_spec,
- #                         OrgDb = org.Mm.eg.db,
-   #                       keyType = "SYMBOL",
-    #                      ont = "BP",
-     #                     pAdjustMethod = "BH",
-      #                    pvalueCutoff = 0.05,
-       #                   qvalueCutoff = 0.2,
-        #                  readable = TRUE)
-
-#DT::datatable(head(ego_dn_2wks_PT_spec)) # yields no results
+# ego_up_2wks_PT_spec <- enrichGO(gene = de_genes_up_2wks_PT_spec,
+#                           universe = uni_genes_2wks_PT_spec,
+#                           OrgDb = org.Mm.eg.db,
+#                           keyType = "SYMBOL",
+#                           ont = "BP",
+#                           pAdjustMethod = "BH",
+#                           pvalueCutoff = 0.05,
+#                           qvalueCutoff = 0.2,
+#                           readable = TRUE)
+# 
+# DT::datatable(head(ego_up_2wks_PT_spec)) # yields no results
+# 
+# ego_dn_2wks_PT_spec <- enrichGO(gene = de_genes_dn_2wks_PT_spec,
+#                           universe = uni_genes_2wks_PT_spec,
+#                           OrgDb = org.Mm.eg.db,
+#                           keyType = "SYMBOL",
+#                           ont = "BP",
+#                           pAdjustMethod = "BH",
+#                           pvalueCutoff = 0.05,
+#                           qvalueCutoff = 0.2,
+#                           readable = TRUE)
+# 
+# DT::datatable(head(ego_dn_2wks_PT_spec)) # yields no results
 ```
 
 The PCA analysis yielded no results, assumingly due to low gene numbers. 
@@ -264,29 +264,29 @@ de_genes_2wks_PT_spec <- res_2wks_PT |>
   dplyr::pull(gene_symbol) |>
   unique()
 
-#ego_3d_PT_spec <- enrichGO(gene = de_genes_3d_PT_spec,
- #                         universe = uni_genes_3d_PT_spec,
-  #                        OrgDb = org.Mm.eg.db,
-   #                       keyType = "SYMBOL",
-    #                      ont = "BP",
-     #                     pAdjustMethod = "BH",
-      #                    pvalueCutoff = 0.05,
-       #                   qvalueCutoff = 0.2,
-        #                  readable = TRUE)
-
-#DT::datatable(head(ego_3d_PT_spec)) # yields no results
-
-#ego_2wks_PT_spec <- enrichGO(gene = de_genes_2wks_PT_spec,
- #                         universe = uni_genes_2wks_PT_spec,
-  #                        OrgDb = org.Mm.eg.db,
-   #                       keyType = "SYMBOL",
-    #                      ont = "BP",
-    #                      pAdjustMethod = "BH",
-     #                     pvalueCutoff = 0.05,
-     #                     qvalueCutoff = 0.2,
-      #                    readable = TRUE)
-
-#DT::datatable(head(ego_2wks_PT_spec)) # yields no results
+# ego_3d_PT_spec <- enrichGO(gene = de_genes_3d_PT_spec,
+#                           universe = uni_genes_3d_PT_spec,
+#                           OrgDb = org.Mm.eg.db,
+#                           keyType = "SYMBOL",
+#                           ont = "BP",
+#                           pAdjustMethod = "BH",
+#                           pvalueCutoff = 0.05,
+#                           qvalueCutoff = 0.2,
+#                           readable = TRUE)
+# 
+# DT::datatable(head(ego_3d_PT_spec)) # yields no results
+# 
+# ego_2wks_PT_spec <- enrichGO(gene = de_genes_2wks_PT_spec,
+#                           universe = uni_genes_2wks_PT_spec,
+#                           OrgDb = org.Mm.eg.db,
+#                           keyType = "SYMBOL",
+#                           ont = "BP",
+#                           pAdjustMethod = "BH",
+#                           pvalueCutoff = 0.05,
+#                           qvalueCutoff = 0.2,
+#                           readable = TRUE)
+# 
+# DT::datatable(head(ego_2wks_PT_spec)) # yields no results
 
 ```
 
@@ -322,16 +322,21 @@ venn_genes <- tibble(
 venn <- ggvenn(gene_list_up, 
                fill_color = c("skyblue", "pink"),
                stroke_size = 0.5,
-               set_name_size = 5,
-               text_size = 4) +
+               set_name_size = 6.5,
+               text_size = 6,
+               show_percentage = FALSE) +
   ggtitle("Upregulated PT-specific Genes Overlap",
           subtitle = "CrePos vs Ctrl (padj < 0.05)") +
-  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5, size = 10))
+  theme(plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 14))
+
 
 venn
+ggsave("results/final_figures/venn_upregulated_PT_genes.pdf", plot = venn, width = 8, height = 6, units = "in", dpi = 300)
 
-# After calculating venn_genes, use this:
+
+
+  # After calculating venn_genes, use this:
 dt <- DT::datatable(
   venn_genes |> 
     as.data.frame(),  # Keep long strings
@@ -374,15 +379,17 @@ venn_genes <- tibble(
 # using subtitle
 venn <- ggvenn(gene_list_dn, 
                fill_color = c("skyblue", "pink"),
-               stroke_size = 0.5,
-               set_name_size = 5,
-               text_size = 4) +
+               stroke_size =0.5,
+               set_name_size = 6.5,
+               text_size = 6,
+               show_percentage = FALSE) +
   ggtitle("Downregulated PT-specific Genes Overlap",
           subtitle = "CrePos vs Ctrl (padj < 0.05)") +
-  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5, size = 10))
+  theme(plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 14))
 
 venn
+ggsave("results/final_figures/venn_downregulated_PT_genes.pdf", plot = venn, width = 8, height = 6, units = "in", dpi = 300)
 
 # After calculating venn_genes, use this:
 dt <- DT::datatable(
@@ -509,7 +516,7 @@ DT::datatable(head(ego_dn_3d_PT_all))
 #Visualize
 
 dotplot(ego_dn_3d_PT_all, showCategory=10) +
-  ggtitle("GO Enrichment Analysis - Downregulated Genes after 3 days")
+  ggtitle("GOEA - Downregulated Genes after 3 days")
 
 
 #------------------------------
@@ -543,11 +550,192 @@ DT::datatable(head(ego_dn_2wks_PT_all))
 
 #Visualize
 dotplot(ego_up_2wks_PT_all, showCategory=10) +
-  ggtitle("GO Enrichment Analysis - Upregulated Genes after 2 weeks")
+  ggtitle("GOEA - Upregulated Genes after 2 weeks")
 dotplot(ego_dn_2wks_PT_all, showCategory=10) +
-  ggtitle("GO Enrichment Analysis - Downregulated Genes after 2 weeks")
+  ggtitle("GOEA- Downregulated Genes after 2 weeks")
 
 ```
+
+
+```{r PT-Score}
+## First, add gene names to the gene counts table
+#read cleaned gene counts table
+genecount_file_cleaned <- readRDS("data/processed_data/gene_counts_YFproject_cleaned.rds")
+
+# Convert Entrez IDs of my res_results to gene symbols
+entrez_ids <- rownames(genecount_file_cleaned)
+gene_symbols <- mapIds(org.Mm.eg.db,
+                       keys = entrez_ids,
+                       column = "SYMBOL",
+                       keytype = "ENTREZID",
+                       multiVals = "first")  # take first if multiple matches
+
+#Add gene symbols to the results table
+genecount_file_cleaned <- as.data.frame(genecount_file_cleaned) |>
+  mutate(
+    entrez_id   = rownames(genecount_file_cleaned),
+    gene_symbol = gene_symbols[entrez_id]
+  )
+
+# Convert Entrez IDs of my res_results to gene names
+gene_names <- mapIds(
+  org.Mm.eg.db,
+  keys      = entrez_ids,
+  column    = "GENENAME",
+  keytype   = "ENTREZID",
+  multiVals = "first"
+)
+
+#Add gene names to the results table
+genecount_file_cleaned <- genecount_file_cleaned|>
+  mutate(gene_name = gene_names[entrez_id])
+
+
+## 
+# Normalisierung auf Kontrollen
+control_samples <- c("Y340", "Y343", "Y344", "Y347", "Y350", "Y351", "Y352", "Y356")
+
+pt_genes_available <- res_3d_PT$gene_symbol
+# pt_genes_available2 <- res_2wks_PT$gene_symbol #not necessary, yields same result
+
+# Z-score basierend nur auf Kontrollen
+# 1. Zuerst die Daten für PT-Gene filtern
+pt_data <- genecount_file_cleaned[genecount_file_cleaned$gene_symbol %in% pt_genes_available, ]
+
+#Rownames as gene names
+rownames(pt_data) <- pt_data$gene_symbol
+
+# 2. Dann nur die Kontroll-Samples auswählen und Mittelwert berechnen
+control_mean <- rowMeans(pt_data[, control_samples])
+
+# 3. Standardabweichung für Kontrollen
+control_sd <- apply(pt_data[, control_samples], 1, sd)
+
+# Dann alle Samples relativ zu Kontrolle normalisieren
+pt_score_all <- colMeans(
+  (bulk_expr[pt_genes_available, ] - control_mean) / control_sd
+)
+
+# Dann alle Samples (inkl. OSKM) normalisieren
+all_samples <- colnames(pt_data)[!colnames(pt_data) %in% c("gene_symbol", "entrez_id", "gene_name")] # alle außer Gen-Info
+pt_score_zscore <- colMeans(
+  (pt_data[, all_samples] - control_mean) / control_sd
+)
+
+# 1. Check Gene-Overlap
+
+pt_genes_available <- res_3d_PT$gene_symbol
+# pt_genes_available2 <- res_2wks_PT$gene_symbol #not necessary, yields same result
+
+# 2. PT-Score berechnen
+pt_score <- colMeans(bulk_data[pt_genes_available, ])
+
+# 3. Normalisierung
+pt_score_normalized <- scale(pt_score)
+
+# Basis-Ansatz
+pt_genes <- c("Acsm2", "Spp2", "Slc34a1", ...) # deine 190 detektierten Gene
+pt_signature <- colMeans(bulk_expr[pt_genes, ])
+
+# Robuster: Z-score normalisiert
+pt_signature_zscore <- apply(bulk_expr[pt_genes, ], 2, function(x) {
+  mean(scale(x))
+})
+
+# Teste ob dein Score mit einzelnen Top-Markern korreliert
+# Korrelation nur für Kontroll-Samples
+cor(pt_score_zscore[control_samples], 
+    as.numeric(pt_data[pt_data$gene_symbol == "Lrp2", control_samples]))
+
+top_markers <- c("Lrp2", "Slc5a2", "Slc34a1", "Pck1", "Fbp1")
+
+correlations_ctrl <- sapply(top_markers, function(gene) {
+  gene_expr <- as.numeric(pt_data[pt_data$gene_symbol == gene, control_samples])
+  cor(pt_score_zscore[control_samples], gene_expr)
+})
+
+print(correlations_ctrl)
+
+# Check: Varianz in den Kontroll-Samples
+pt_score_ctrl <- pt_score_zscore[control_samples]
+print(pt_score_ctrl)
+sd(pt_score_ctrl)  # Wenn sehr klein (<0.1), dann wenig Variation
+
+# Variation einzelner Gene
+lrp2_ctrl <- as.numeric(pt_data[pt_data$gene_symbol == "Lrp2", control_samples])
+print(lrp2_ctrl)
+sd(lrp2_ctrl) / mean(lrp2_ctrl)  # Coefficient of variation
+
+# Korrelation mit ALLEN Samples (inkl. OSKM)
+top_markers <- c("Lrp2", "Slc5a2", "Slc34a1", "Pck1", "Fbp1")
+
+correlations_all <- sapply(top_markers, function(gene) {
+  gene_expr <- as.numeric(pt_data[pt_data$gene_symbol == gene, all_samples])
+  cor(pt_score_zscore, gene_expr)
+})
+
+print(correlations_all)
+
+# Visualisierung für Lrp2
+# ALLES ZUSAMMEN ausführen (markieren und Ctrl+Enter)
+lrp2_all <- as.numeric(pt_data[pt_data$gene_symbol == "Lrp2", all_samples])
+
+plot(lrp2_all, pt_score_zscore,
+     col = ifelse(names(pt_score_zscore) %in% control_samples, "blue", "red"),
+     pch = 19, cex = 1.5,
+     xlab = "Lrp2 Expression (counts)",
+     ylab = "PT Signature Score (Z-score)",
+     main = paste("Correlation (all):", round(cor(pt_score_zscore, lrp2_all), 2)))
+legend("topright", c("Control", "OSKM"), col = c("blue", "red"), pch = 19)
+abline(lm(pt_score_zscore ~ lrp2_all), col = "black", lwd = 2)
+
+
+# Vergleiche Mittelwerte
+# Kontrollen (blau):
+mean(lrp2_all[names(pt_score_zscore) %in% control_samples])
+mean(pt_score_zscore[control_samples])
+
+# OSK (rot):
+osk_samples <- names(pt_score_zscore)[!names(pt_score_zscore) %in% control_samples]
+mean(lrp2_all[!names(pt_score_zscore) %in% control_samples])
+mean(pt_score_zscore[osk_samples])
+
+# OSKM 3 Tage samples
+osk_3d_samples <-c("Y341", "Y342", "Y345", "Y346")
+mean(lrp2_all[names(pt_score_zscore) %in% osk_3d_samples])
+mean(pt_score_zscore[osk_3d_samples])
+
+# OSKM 2 weeks samples
+osk_2wks_samples <-c("Y348", "Y349", "Y353", "Y354", "Y355")
+mean(lrp2_all[names(pt_score_zscore) %in% osk_2wks_samples])
+mean(pt_score_zscore[osk_2wks_samples])
+
+
+# Negativkontrolle: Sollte NICHT korrelieren
+cor(pt_signature, bulk_expr["Aqp2", ])  # Collecting Duct Marker
+cor(pt_signature, bulk_expr["Slc12a3", ])  # DCT Marker
+
+# Option B: Funktionale Gruppen
+transporters <- pt_genes[grepl("^Slc", pt_genes)]
+metabolic <- pt_genes[pt_genes %in% c("Pck1", "Fbp1", "G6pc", ...)]
+
+score_transport <- colMeans(bulk_expr[transporters, ])
+score_metabolic <- colMeans(bulk_expr[metabolic, ])
+
+# Welche PT-Funktionen gehen zuerst verloren?
+transport_genes <- c("Slc34a1", "Slc22a6", "Slc5a2", ...)
+metabolic_genes <- c("Pck1", "Fbp1", "G6pc", ...)
+reabsorption_genes <- c("Lrp2", "Cubn", "Slc7a9", ...)
+
+score_transport <- colMeans(bulk_expr[transport_genes, ])
+score_metabolic <- colMeans(bulk_expr[metabolic_genes, ])
+
+```
+
+
+
+
+
 # Conclusion
 
 #### For 1. PT-specifically expressed genes: 

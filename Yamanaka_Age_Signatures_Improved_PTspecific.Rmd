@@ -522,101 +522,100 @@ write.csv(merged_2wks, "results/differential_expression/aging_vs_yamanaka_2wks_P
 
 
 ```{r aging-significant genes}
+
 # 3 days analysis
 # Aging-significant genes
 aging_changed_3d <- merged_3d %>% filter(adj.P.Val < 0.05)
 
-# Classify
-aging_changed_3d <- aging_changed_3d %>%
+
+#CLassify
+lfc_min <- 0.1
+padj_max <- 0.05
+
+aging_changed_3d <- merged_3d %>%
+  filter(
+    abs(logFC) >= lfc_min & adj.P.Val <= padj_max
+    # NO yam_padj or yam_pval requirement
+  ) %>%
   mutate(effect = case_when(
-    sign(logFC) != sign(yam_log2FC) ~ "Reversed",     # reversed
-    sign(logFC) == sign(yam_log2FC) ~ "Enhanced",     # pro-aging / amplified
-    TRUE ~ "Other"
+    # 1. FULL REVERSAL: opposite sign
+    sign(logFC) != sign(yam_log2FC) ~ "Fully Reversed",
+    
+    # 2. PARTIAL REVERSAL: same sign but Yamanaka < 50% of aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) < 0.5 * abs(logFC) ~ "Partially Reversed",
+    
+    # 3. ENHANCED: same sign and Yamanaka ≥ 1.5x aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) >= 1.5 * abs(logFC) ~ "Enhanced",
+    
+    # 4. SIMILAR: same sign, similar magnitude
+    TRUE ~ "Similar"
   ))
 
-# Extract gene lists
-reversed_genes_3d <- aging_changed_3d %>% filter(effect == "Reversed") %>% pull(gene)
-enhanced_genes_3d <- aging_changed_3d %>% filter(effect == "Enhanced") %>% pull(gene)
-
-length(reversed_genes_3d)
-length(enhanced_genes_3d)
-
-
-#GO Term analysis
-# Genes in your pseudobulk (PB)
-pb_genes <- rownames(pb)
-
-# Genes in Yamanaka 2-week dataset
-yamanaka_genes <- res_3d_df$gene_symbol  # adjust column name if different
-
-# Create the universe for GO/pathway analysis
-gene_universe <- intersect(pb_genes, yamanaka_genes)
-
-length(gene_universe)
-# This tells you how many genes are in your universe
-
-ego_result_reversed_3d <- enrichGO(gene = reversed_genes_3d,
-                          universe = gene_universe,
-                          OrgDb = org.Mm.eg.db,
-                          keyType = "SYMBOL",
-                          ont = "BP",
-                          pAdjustMethod = "BH",
-                          pvalueCutoff = 0.05,
-                          qvalueCutoff = 0.2,
-                          readable = TRUE)
+# Extract lists
+fully_reversed_3d <- aging_changed_3d %>% filter(effect == "Fully Reversed") %>% pull(gene)
+partially_reversed_3d <- aging_changed_3d %>% filter(effect == "Partially Reversed") %>% pull(gene)
+enhanced_3d <- aging_changed_3d %>% filter(effect == "Enhanced") %>% pull(gene)
+similar_3d <- aging_changed_3d %>% filter(effect == "Similar") %>% pull(gene)
 
 
-DT::datatable(head(ego_result_reversed_3d)) # shows all genes that are now enriched for the pathways and how many there are
-
-ego_result_enhanced_3d <- enrichGO(
-  gene = enhanced_genes_3d,
-  universe = gene_universe,
-  OrgDb = org.Mm.eg.db,
-  keyType = "SYMBOL",
-  ont = "BP",
-  pAdjustMethod = "BH",
-  pvalueCutoff = 0.05,
-  qvalueCutoff = 0.2,
-  readable = TRUE
-)
-
-DT::datatable(head(ego_result_enhanced_3d))
-
-#Visualize
-dotplot(ego_result_reversed_3d, showCategory=10) +
-  ggtitle("GO Enrichment Analysis - Upregulated Genes : Dotplot")
-dotplot(ego_result_enhanced_3d, showCategory=10) +
-  ggtitle("GO Enrichment Analysis - Downregulated Genes : Dotplot")
+length(fully_reversed_3d)
+length(partially_reversed_3d)
+length(enhanced_3d)
+length(similar_3d)
 
 
-# Convert to a data frame
-reversed_df_3d <- as.data.frame(ego_result_reversed_3d)
-enhanced_df_3d <- as.data.frame(ego_result_enhanced_3d)
-
-# View top 10 rows
-head(reversed_df_3d, 10)
-head(enhanced_df_3d, 10)
-
-#=============================================
-# 2 weeks analysis
-
+# 2 weeks
 # Aging-significant genes
 aging_changed_2wks <- merged_2wks %>% filter(adj.P.Val < 0.05)
 
-# Classify
-aging_changed_2wks <- aging_changed_2wks %>%
+
+#CLassify
+lfc_min <- 0.1
+padj_max <- 0.05
+
+aging_changed_2wks <- merged_2wks %>%
+  filter(
+    abs(logFC) >= lfc_min & adj.P.Val <= padj_max
+    # NO yam_padj or yam_pval requirement
+  ) %>%
   mutate(effect = case_when(
-    sign(logFC) != sign(yam_log2FC) ~ "Reversed",     # reversed
-    sign(logFC) == sign(yam_log2FC) ~ "Enhanced",     # pro-aging / amplified
-    TRUE ~ "Other"
+    # 1. FULL REVERSAL: opposite sign
+    sign(logFC) != sign(yam_log2FC) ~ "Fully Reversed",
+    
+    # 2. PARTIAL REVERSAL: same sign but Yamanaka < 50% of aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) < 0.5 * abs(logFC) ~ "Partially Reversed",
+    
+    # 3. ENHANCED: same sign and Yamanaka ≥ 1.5x aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) >= 1.5 * abs(logFC) ~ "Enhanced",
+    
+    # 4. SIMILAR: same sign, similar magnitude
+    TRUE ~ "Similar"
   ))
 
-# Extract gene lists
-reversed_genes_2wks <- aging_changed_2wks %>% filter(effect == "Reversed") %>% pull(gene)
-enhanced_genes_2wks <- aging_changed_2wks %>% filter(effect == "Enhanced") %>% pull(gene)
+# Extract lists
+fully_reversed_2wks <- aging_changed_2wks %>% filter(effect == "Fully Reversed") %>% pull(gene)
+partially_reversed_2wks <- aging_changed_2wks %>% filter(effect == "Partially Reversed") %>% pull(gene)
+enhanced_2wks <- aging_changed_2wks %>% filter(effect == "Enhanced") %>% pull(gene)
+similar_2wks <- aging_changed_2wks %>% filter(effect == "Similar") %>% pull(gene)
 
-length(reversed_genes_2wks)
-length(enhanced_genes_2wks)
+
+length(fully_reversed_2wks)
+length(partially_reversed_2wks)
+length(enhanced_2wks)
+length(similar_2wks)
+
+
+write.csv(aging_changed_3d, "results/differential_expression/aging_changed_3d.csv", row.names = FALSE)
+write.csv(aging_changed_2wks, "results/differential_expression/aging_changed_2wks.csv", row.names = FALSE)
+
+
+
+
+
 
 
 #GO Term analysis

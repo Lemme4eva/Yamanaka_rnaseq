@@ -594,7 +594,8 @@ saveRDS(vsd_unblind_3d,file="results/qc/vsd_unblind_3d.rds")
 plotPCA2(vsd_unblind_3d,
          intgroup = "genotype",
          ntop=500,
-         PCs=c(x=1,y=2))
+         PCs=c(x=1,y=2),
+         colour = group)
 
 # plot PCA, coloring different genotypes and times
 #colData(vsd_unblind_3d)$genotype_time <- factor(
@@ -991,6 +992,10 @@ genes <- strsplit(bp_df$core_enrichment[1], "/")[[1]]
 
 sig_bp[, c("Description", "NES", "p.adjust")] 
 
+write.csv(sig_bp,file = "results/differential_expression/GSEA/GSEA_3d_sig_bp.csv",
+          row.names = FALSE)
+
+
 #6 Plot results
 bp_df <- as.data.frame(gsea_results$BP)
 bp_df <- bp_df[order(bp_df$p.adjust), ][1:15, ]  # top 10
@@ -1055,6 +1060,9 @@ bp_df$core_enrichment[1]
 genes <- strsplit(bp_df$core_enrichment[1], "/")[[1]]
 
 sig_bp[, c("Description", "NES", "p.adjust")] 
+
+write.csv(sig_bp,file = "results/differential_expression/GSEA/GSEA_2wks_sig_bp.csv",
+          row.names = FALSE)
 
 #6 Plot results
 bp_df <- as.data.frame(gsea_results$BP)

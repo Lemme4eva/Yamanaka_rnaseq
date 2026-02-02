@@ -113,6 +113,9 @@ I will remove genes with total counts below 10, as well as round values.
 min_count <- 10
 M <- M[rowSums(M) >= min_count,] #this steps reduces the amount of detected genes from 45569 to 23150
 
+saveRDS(M,file="data/processed_data/gene_counts_YFproject_cleaned.rds")
+
+
 ```
 
 ## Set up the Input for DESeq2

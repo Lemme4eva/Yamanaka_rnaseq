@@ -590,20 +590,93 @@ write.csv(merged_2wks, "results/differential_expression/aging_vs_yamanaka_2wks.c
 # Aging-significant genes
 aging_changed_3d <- merged_3d %>% filter(adj.P.Val < 0.05)
 
-# Classify
-aging_changed_3d <- aging_changed_3d %>%
+
+#CLassify
+lfc_min <- 0.1
+padj_max <- 0.05
+
+aging_changed_3d <- merged_3d %>%
+  filter(
+    abs(logFC) >= lfc_min & adj.P.Val <= padj_max
+    # NO yam_padj or yam_pval requirement
+  ) %>%
   mutate(effect = case_when(
-    sign(logFC) != sign(yam_log2FC) ~ "Reversed",     # reversed
-    sign(logFC) == sign(yam_log2FC) ~ "Enhanced",     # pro-aging / amplified
-    TRUE ~ "Other"
+    # 1. FULL REVERSAL: opposite sign
+    sign(logFC) != sign(yam_log2FC) ~ "Fully Reversed",
+    
+    # 2. PARTIAL REVERSAL: same sign but Yamanaka < 50% of aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) < 0.5 * abs(logFC) ~ "Partially Reversed",
+    
+    # 3. ENHANCED: same sign and Yamanaka ≥ 1.5x aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) >= 1.5 * abs(logFC) ~ "Enhanced",
+    
+    # 4. SIMILAR: same sign, similar magnitude
+    TRUE ~ "Similar"
   ))
 
-# Extract gene lists
-reversed_genes_3d <- aging_changed_3d %>% filter(effect == "Reversed") %>% pull(gene)
-enhanced_genes_3d <- aging_changed_3d %>% filter(effect == "Enhanced") %>% pull(gene)
+# Extract lists
+fully_reversed_3d <- aging_changed_3d %>% filter(effect == "Fully Reversed") %>% pull(gene)
+partially_reversed_3d <- aging_changed_3d %>% filter(effect == "Partially Reversed") %>% pull(gene)
+enhanced_3d <- aging_changed_3d %>% filter(effect == "Enhanced") %>% pull(gene)
+similar_3d <- aging_changed_3d %>% filter(effect == "Similar") %>% pull(gene)
 
-length(reversed_genes_3d)
-length(enhanced_genes_3d)
+
+length(fully_reversed_3d)
+length(partially_reversed_3d)
+length(enhanced_3d)
+length(similar_3d)
+
+
+# 2 weeks
+# Aging-significant genes
+aging_changed_2wks <- merged_2wks %>% filter(adj.P.Val < 0.05)
+
+
+#CLassify
+lfc_min <- 0.1
+padj_max <- 0.05
+
+aging_changed_2wks <- merged_2wks %>%
+  filter(
+    abs(logFC) >= lfc_min & adj.P.Val <= padj_max
+    # NO yam_padj or yam_pval requirement
+  ) %>%
+  mutate(effect = case_when(
+    # 1. FULL REVERSAL: opposite sign
+    sign(logFC) != sign(yam_log2FC) ~ "Fully Reversed",
+    
+    # 2. PARTIAL REVERSAL: same sign but Yamanaka < 50% of aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) < 0.5 * abs(logFC) ~ "Partially Reversed",
+    
+    # 3. ENHANCED: same sign and Yamanaka ≥ 1.5x aging magnitude
+    sign(logFC) == sign(yam_log2FC) & 
+      abs(yam_log2FC) >= 1.5 * abs(logFC) ~ "Enhanced",
+    
+    # 4. SIMILAR: same sign, similar magnitude
+    TRUE ~ "Similar"
+  ))
+
+# Extract lists
+fully_reversed_2wks <- aging_changed_2wks %>% filter(effect == "Fully Reversed") %>% pull(gene)
+partially_reversed_2wks <- aging_changed_2wks %>% filter(effect == "Partially Reversed") %>% pull(gene)
+enhanced_2wks <- aging_changed_2wks %>% filter(effect == "Enhanced") %>% pull(gene)
+similar_2wks <- aging_changed_2wks %>% filter(effect == "Similar") %>% pull(gene)
+
+
+length(fully_reversed_2wks)
+length(partially_reversed_2wks)
+length(enhanced_2wks)
+length(similar_2wks)
+
+
+write.csv(aging_changed_3d, "results/differential_expression/aging_changed_3d.csv", row.names = FALSE)
+write.csv(aging_changed_2wks, "results/differential_expression/aging_changed_2wks.csv", row.names = FALSE)
+
+
+
 
 
 #GO Term analysis
