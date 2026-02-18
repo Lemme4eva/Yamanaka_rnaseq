@@ -224,11 +224,16 @@ colData(vsd_blind)$genotype_time <- factor(
   paste(colData(vsd_blind)$genotype, colData(vsd_blind)$time, sep="_")
 )
 
-plotPCA2(vsd_blind,
+p <- plotPCA2(vsd_blind,
          intgroup = "genotype_time",
          ntop = 500,
          PCs = c(x=1, y=2),
          colour = group)  # <- this maps colors)
+
+ggsave("results/final_figures/PCA_all.pdf", plot = p, width = 6, height = 4)
+p
+
+ggplot_build(p)$data[[1]]$colour %>% unique()
 
 ```
 

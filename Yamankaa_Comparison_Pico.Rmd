@@ -1,0 +1,563 @@
+---
+title: "Yamanaka_RNASeq_Comparisons_Between_Analyses"
+output: html_document
+date: "2025-12-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+#install.packages("renv")
+##renv::init()        # Initialize project environment
+##renv::snapshot()    # Save package versions to renv.lock
+##renv::restore()     # Recreate exact environment elsewhere
+
+## Renew GitHub Token
+# You must have a GitHub Personal Access Token (PAT) stored securely.
+# If not already configured, run this once manually before using the script:
+#gitcreds_set()
+
+# # Retrieve token from the gitcreds store
+# token <- gitcreds::gitcreds_get()$password
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+# Set Bioc version to latest (3.22)
+#BiocManager::install(version = "3.22")
+
+#bioc_pkgs <- c(
+#  "KEGGREST", "Biobase", "AnnotationDbi", "S4Vectors", "Biostrings",
+#  "Seqinfo", "BiocVersion", "org.Mm.eg.db", "XVector", "IRanges", "BiocGenerics"
+#)
+
+#BiocManager::install(bioc_pkgs, update = TRUE, ask = FALSE)
+#renv::install(c("here", "fs", "DT", "dplyr", "stringr", "tibble", "qs"))
+#renv::install("enrichplot")
+#renv::install("tibble")
+#renv::install("ggrepel")
+#renv::install("ggvenn")
+#renv::install("limma")
+#renv::settings$bioconductor.version("3.22")
+#renv::snapshot()   # records exact versions in renv.lock
+
+library(usethis)
+library(renv)
+library(gitcreds)
+library(dplyr)
+library(stringr)
+library(DESeq2)
+library(here)
+library(fs)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(qs)
+library(enrichplot)
+library(tibble)
+library(ggrepel)
+library(ggvenn)
+library(patchwork)
+library(limma)
+
+#Use external function script
+source("scripts/plotPCA2.R")
+source("scripts/runGSEA.R")
+
+```
+
+Documentation of used code.
+In this script I compare our results with the OSKM and OKSM mouse models, published data from Pico et al. 2025.
+
+First I need to load the files.
+
+```{r load results tables from former analyses}
+
+res_multi_df <- qread("results/differential_expression/res_multi_df.qs")
+res_3d_df <- qread("results/differential_expression/res_3d_df.qs")
+res_2wks_df <- qread("results/differential_expression/res_2wks_df.qs")
+
+### .. read it:
+M <- read.table("data/processed_data/counts_data/Pico2025_raw_counts.txt",
+                header = TRUE,
+                sep = "\t",
+                quote = ""
+)
+
+dim(M)
+
+# .. display the first 6 rows:
+dt <- DT::datatable(M |> head())
+dt
+
+#only keep columns for WT and for OSKM and OKSM mice
+M <- M %>% select("gene_id", "gene_name", "AS_KID_1", "AS_KID_2", "AS_KID_3", "AS_KID_4", "AS_KID_5", "AS_KID_6", "AS_KID_7", "AS_KID_8", "AS_KID_9", "AS_KID_10", "AS_KID_11", "AS_KID_12")
+
+# Set gene_id (or gene_name) as rownames, then remove both annotation columns
+rownames(M) <- M$gene_id
+M <- M[, !names(M) %in% c("gene_id", "gene_name")]
+
+#convert the column names to all-lowercase
+colnames(M) <- tolower(colnames(M))
+
+#discard genes with a total count < 10
+min_count <- 10
+M <- M %>% filter(rowSums(across(where(is.numeric))) >= min_count)
+
+#map matrix entries with fractional digits to the next higher integer value
+M <- M %>% mutate(across(where(is.numeric), ceiling))
+
+```
+
+
+## Set up the Input for DESeq2
+
+In order to run the DESeq2 analysis, we need a meta table containing all information of different groups and treatments.
+
+
+```{r ColData}
+# Sample names must match the count matrix column names
+sample_names_P <- c("as_kid_1", "as_kid_2", "as_kid_3", "as_kid_4", "as_kid_5", "as_kid_6", "as_kid_7", "as_kid_8", "as_kid_9", "as_kid_10", "as_kid_11", "as_kid_12")
+
+# Create metadata
+colData_P <- data.frame(
+  row.names = sample_names,
+  strain = c("WT", "WT", "WT", "4Fj", "4Fj", "4Fj", "4FsB", "4FsB", "4FsB", "4Fk", 
+               "4Fk", "4Fk")
+)
+
+
+# Make sure group/treatment are factors
+colData_P$strain <- factor(colData$strain)
+
+#Set reference levels
+colData_P$strain <- relevel(colData$strain, ref = "WT")
+
+```
+
+```{r DESeq2 analysis for Pico data}
+## Running DESeq2 Analysis for each timepoint
+# ============================================
+
+# 3d Analysis
+dds_Pico <- DESeqDataSetFromMatrix(
+  countData = M,
+  colData = colData_P,
+  design = ~ strain  # or ~ genotype, if correction for age not wanted
+)
+dds_Pico <- DESeq(dds_Pico)
+
+# compute all pairwise results separately
+res_4Fj  <- as.data.frame(results(dds_Pico, contrast = c("strain", "4Fj", "WT")))
+res_4FsB <- as.data.frame(results(dds_Pico, contrast = c("strain", "4FsB", "WT")))
+res_4Fk  <- as.data.frame(results(dds_Pico, contrast = c("strain", "4Fk", "WT")))
+
+# rename columns
+colnames(res_4Fj)  <- paste0(colnames(res_4Fj), "_4Fj_vs_WT")
+colnames(res_4FsB) <- paste0(colnames(res_4FsB), "_4FsB_vs_WT")
+colnames(res_4Fk)  <- paste0(colnames(res_4Fk), "_4Fk_vs_WT")
+
+# combine
+res_all <- cbind(res_4Fj, res_4FsB, res_4Fk)
+qsave(res_all, "results/differential_expression/res_all_Pico_Experiment.qs")
+
+```
+
+
+```{r PCA}
+
+vsd_blind_Pico <- vst(dds_Pico, blind=TRUE)
+
+p <- plotPCA2(vsd_blind_Pico,
+         intgroup = "strain",
+         ntop=500,
+         PCs=c(x=1,y=2),
+         colour = group) 
+p
+#ggsave("results/final_figures/PCA_3d.pdf", plot = p, width = 6, height = 4)
+
+```
+
+
+```{r read dds}
+
+dds_3d <- qread("~/Documents/Arbeit_Forschung/Yamanaka/Pax8_RNASeq/Yamanaka_rnaseq/results/differential_expression/dds_3d.qs")
+dds_2wks <- qread("~/Documents/Arbeit_Forschung/Yamanaka/Pax8_RNASeq/Yamanaka_rnaseq/results/differential_expression/dds_2wks.qs")
+
+```
+
+```{r Correlation Heatmap between experiments}
+# unfortunately not helpful at all
+library(limma)
+library(pheatmap)
+
+# Schritt 1: VST
+vsd_3d   <- vst(dds_3d, blind = TRUE)
+vsd_2wks <- vst(dds_2wks, blind = TRUE)
+vsd_Pico <- vst(dds_Pico, blind = TRUE)
+
+# Schritt 2: Matrizen extrahieren
+mat_3d   <- assay(vsd_3d)
+mat_2wks <- assay(vsd_2wks)
+mat_Pico <- assay(vsd_Pico)
+
+# Ensembl -> Entrez
+entrez_ids <- mapIds(org.Mm.eg.db,
+                     keys    = rownames(mat_Pico),
+                     column  = "ENTREZID",
+                     keytype = "ENSEMBL",
+                     multiVals = "first")
+
+# NAs entfernen
+entrez_ids <- entrez_ids[!is.na(entrez_ids)]
+mat_Pico   <- mat_Pico[names(entrez_ids), ]
+rownames(mat_Pico) <- entrez_ids
+
+
+# Schritt 3: Gemeinsame Gene
+common_genes <- Reduce(intersect, list(rownames(mat_3d), rownames(mat_2wks), rownames(mat_Pico)))
+mat_3d   <- mat_3d[common_genes, ]
+mat_2wks <- mat_2wks[common_genes, ]
+mat_Pico <- mat_Pico[common_genes, ]
+
+# Schritt 4: Zusammenführen
+mat_combined <- cbind(mat_3d, mat_2wks, mat_Pico)
+
+# Schritt 5: Batch-Korrektur (3d und 2wks = gleiches Experiment)
+batch <- c(rep("Pax8_OKS", ncol(mat_3d) + ncol(mat_2wks)), 
+           rep("Pico", ncol(mat_Pico)))
+mat_corrected <- removeBatchEffect(mat_combined, batch = batch)
+
+# Schritt 6: Annotation
+annotation_col <- data.frame(
+  Experiment = batch,
+  Group      = c(as.character(dds_3d$genotype), 
+                 as.character(dds_2wks$genotype), 
+                 as.character(dds_Pico$strain)),
+  Timepoint  = c(rep("3d",   ncol(mat_3d)), 
+                 rep("2wks", ncol(mat_2wks)), 
+                 rep("Pico", ncol(mat_Pico)))
+)
+rownames(annotation_col) <- colnames(mat_corrected)
+
+# Schritt 7: Correlation Heatmap
+cor_matrix <- cor(mat_corrected)
+
+pheatmap(cor_matrix,
+         annotation_col = annotation_col,
+         annotation_row = annotation_col,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         main = "Sample Correlation Heatmap")
+```
+
+
+Try a new heatmap, now using the logFC
+
+```{r heatmap with logFC}
+
+# Ensembl -> Entrez für die Pico Ergebnisse
+
+convert_ensembl_to_entrez <- function(res_df) {
+  entrez_ids <- mapIds(org.Mm.eg.db,
+                       keys      = rownames(res_df),
+                       column    = "ENTREZID",
+                       keytype   = "ENSEMBL",
+                       multiVals = "first")  # nimmt nur den ersten Treffer
+  
+  # NAs entfernen
+  valid <- !is.na(entrez_ids)
+  res_df     <- res_df[valid, ]
+  entrez_ids <- entrez_ids[valid]
+  
+  # Duplikate entfernen (den mit niedrigstem padj behalten)
+  dup <- duplicated(entrez_ids)
+  res_df     <- res_df[!dup, ]
+  entrez_ids <- entrez_ids[!dup]
+  
+  rownames(res_df) <- entrez_ids
+  return(res_df)
+}
+
+res_4Fj  <- convert_ensembl_to_entrez(res_4Fj)
+res_4FsB <- convert_ensembl_to_entrez(res_4FsB)
+res_4Fk  <- convert_ensembl_to_entrez(res_4Fk)
+
+# Nur log2FoldChange Spalte behalten
+# common_genes neu berechnen basierend auf den results data frames
+common_genes <- Reduce(intersect, list(rownames(res_3d), 
+                                       rownames(res_2wks), 
+                                       rownames(res_4Fj), 
+                                       rownames(res_4FsB), 
+                                       rownames(res_4Fk)))
+length(common_genes)
+
+common_genes <- Reduce(intersect, list(
+  rownames(res_3d), 
+  rownames(res_2wks), 
+  rownames(res_4Fj), 
+  rownames(res_4FsB), 
+  rownames(res_4Fk)
+))
+length(common_genes)
+
+lfc_combined <- data.frame(
+  LFC_3d   = res_3d[common_genes,   "log2FoldChange"],
+  LFC_2wks = res_2wks[common_genes, "log2FoldChange"],
+  LFC_4Fj  = res_4Fj[common_genes,  "log2FoldChange_4Fj_vs_WT"],
+  LFC_4FsB = res_4FsB[common_genes, "log2FoldChange_4FsB_vs_WT"],
+  LFC_4Fk  = res_4Fk[common_genes,  "log2FoldChange_4Fk_vs_WT"],
+  row.names = common_genes
+)
+dim(lfc_combined)
+
+# Signifikante Gene aus mindestens einem Vergleich
+sig_genes <- Reduce(union, list(
+  rownames(res_3d[!is.na(res_3d$padj)     & res_3d$padj < 0.05, ]),
+  rownames(res_2wks[!is.na(res_2wks$padj) & res_2wks$padj < 0.05, ]),
+  rownames(res_4Fj[!is.na(res_4Fj$padj_4Fj_vs_WT)   & res_4Fj$padj_4Fj_vs_WT < 0.05, ]),
+  rownames(res_4FsB[!is.na(res_4FsB$padj_4FsB_vs_WT) & res_4FsB$padj_4FsB_vs_WT < 0.05, ]),
+  rownames(res_4Fk[!is.na(res_4Fk$padj_4Fk_vs_WT)   & res_4Fk$padj_4Fk_vs_WT < 0.05, ])
+))
+
+sig_genes <- intersect(sig_genes, common_genes)
+length(sig_genes)
+
+# Heatmap Matrix
+lfc_heatmap <- lfc_combined[sig_genes, ]
+dim(lfc_heatmap)
+
+# Zusätzlicher LFC Filter
+lfc_filter <- apply(lfc_heatmap, 1, function(x) any(abs(x) > 2.5, na.rm = TRUE))
+lfc_heatmap_filtered <- lfc_heatmap[lfc_filter, ]
+dim(lfc_heatmap_filtered)
+
+# Gewünschte Spaltenreihenfolge definieren
+col_order <- c("LFC_4FsB", "LFC_4Fj", "LFC_4Fk", "LFC_3d", "LFC_2wks")
+
+
+pheatmap(lfc_heatmap_filtered,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-3, 3, length.out = 101),  # LFC Skala begrenzen
+         show_rownames = FALSE,  # bei 1265 Genen nicht lesbar
+         cluster_cols = TRUE,
+         cluster_rows = TRUE,
+         main = "Log2FoldChange Heatmap (induced vs. control)")
+
+```
+
+
+Using now from Humphrey's single cell atlas the healthy mouse set.
+
+```{r Humphrey's gene list}
+gene_list <- c("Slc5a12", "Nox4", "Slc34a1", "Fut9", "Dab2", "Slc4a4", "Nhs", "Ndrg1", 
+               "Slc13a1", "D630023F18Rik", "Lrp2", "Bnc2", "Slc6a19", "Gatm", "Ptprd", 
+               "Cryl1", "Maf", "Auts2", "Abcc2", "Ano3", "Kap", "Cyp2e1", "Slc7a13", 
+               "Cyp4b1", "Slc27a2", "Inmt", "Gpx1", "Ces1f", "Cndp2", "Cyb5a", "Selenop", 
+               "Napsa", "Nudt19", "Ugt2b38", "Acy3", "Fth1", "Cd36", "Dbi", "Akr1c21", "Atp11a")
+
+# Gensymbole -> Entrez IDs
+entrez_list <- mapIds(org.Mm.eg.db,
+                      keys      = gene_list,
+                      column    = "ENTREZID",
+                      keytype   = "SYMBOL",
+                      multiVals = "first")
+
+entrez_list <- entrez_list[!is.na(entrez_list)]
+
+# Nur Gene die auch in lfc_combined vorhanden sind
+entrez_list <- entrez_list[entrez_list %in% rownames(lfc_combined)]
+length(entrez_list)
+
+lfc_genelist <- lfc_combined[entrez_list, ]
+
+# Zeilennamen zurück zu Gensymbolen für lesbare Heatmap
+rownames(lfc_genelist) <- names(entrez_list)
+
+# Gewünschte Spaltenreihenfolge definieren
+col_order <- c("LFC_4FsB", "LFC_4Fj", "LFC_4Fk", "LFC_3d", "LFC_2wks")
+
+
+p <- pheatmap(lfc_genelist[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1.5, 1.5, length.out = 101),  # engere Skala
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = TRUE,
+         fontsize_row = 8,
+         cellheight = 12,
+         cellwidth = 40,
+         main = "Log2FoldChange - Kidney reprogramming signatures")
+
+ggsave("results/working_figures/heatmap_genelist.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+
+```
+
+Trying another gene list, adding some more specific Tubular marker genes and taking out some more ubiquitous genes
+
+```{r}
+gene_list_PT <- c("Slc5a2", "Slc34a1", "Lrp2", "Slc13a3", "Slc22a6", "Slc7a13", 
+                  "Slc27a2", "Gatm", "Slc6a19", "Napsa", "Cubn", "Hnf4a", "Slc5a12", 
+                  "Nox4", "Dab2", "Cd36", "Gpx1", "Cyp2e1", "Cyp4b1", "Inmt", 
+                  "Cndp2", "Acy3", "Ces1f", "Selenop", "Nudt19", "Ugt2b38")
+
+# Gensymbole -> Entrez IDs
+entrez_PT <- mapIds(org.Mm.eg.db,
+                    keys      = gene_list_PT,
+                    column    = "ENTREZID",
+                    keytype   = "SYMBOL",
+                    multiVals = "first")
+
+entrez_PT <- entrez_PT[!is.na(entrez_PT)]
+entrez_PT <- entrez_PT[entrez_PT %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_PT), "von", length(gene_list_PT), "\n")
+
+# LFC Matrix für PT Gene
+lfc_PT <- lfc_combined[entrez_PT, ]
+rownames(lfc_PT) <- names(entrez_PT)
+
+# Heatmap
+p <- pheatmap(lfc_PT[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = TRUE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FoldChange - Proximal Tubule Marker Genes")
+ggsave("results/working_figures/heatmap_genelist_PT.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```
+
+Now the same for collecting duct cells - using a gene list, created by Claude
+
+```{r collecting duct}
+gene_list_CD <- c(
+  # Principal Cells (PC)
+  "Aqp2",      # Aquaporin-2 - klassischer PC Marker
+  "Aqp3",      # Aquaporin-3
+  "Aqp4",      # Aquaporin-4
+  "Scnn1a",    # ENaC alpha
+  "Scnn1b",    # ENaC beta
+  "Scnn1g",    # ENaC gamma
+  "Avpr2",     # Vasopressin Rezeptor
+  "Fxyd4",     # FXYD4 - PC spezifisch
+  "Notch2",    # Notch2 - PC Identität
+  
+  # Type A Intercalated Cells (A-IC)
+  "Atp6v1b1",  # H+-ATPase - klassischer IC Marker
+  "Atp6v0d2",  # H+-ATPase Untereinheit
+  "Slc4a1",    # AE1 Anionenaustauscher - A-IC spezifisch
+  "Kit",       # c-Kit - A-IC Oberflächenmarker
+  "Adgrf5",    # A-IC spezifisch
+  "Hepacam2",  # A-IC Oberflächenmarker
+  
+  # Type B Intercalated Cells (B-IC)
+  "Slc26a4",   # Pendrin - B-IC spezifisch
+  "Slc4a9",    # AE4 - B-IC
+  
+  # Pan-Collecting Duct
+  "Calb1",     # Calbindin
+  "Kcnj1",     # ROMK Kaliumkanal
+  "Jag1"       # Notch Ligand - IC zu PC Transition
+)
+
+# Gensymbole -> Entrez IDs
+entrez_CD <- mapIds(org.Mm.eg.db,
+                    keys      = gene_list_CD,
+                    column    = "ENTREZID",
+                    keytype   = "SYMBOL",
+                    multiVals = "first")
+
+entrez_CD <- entrez_CD[!is.na(entrez_CD)]
+entrez_CD <- entrez_CD[entrez_CD %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_CD), "von", length(gene_list_CD), "\n")
+
+# LFC Matrix
+lfc_CD <- lfc_combined[entrez_CD, ]
+rownames(lfc_CD) <- names(entrez_CD)
+
+# Heatmap
+p <- pheatmap(lfc_CD[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = TRUE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FoldChange - Collecting Duct Marker Genes")
+ggsave("results/working_figures/heatmap_genelist_CD.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```
+
+and for glomerular cells
+
+```{r Glomerular cells}
+gene_list_Podo <- c(
+  # Klassische Podocyten-Marker
+  "Nphs1",     # Nephrin - der wichtigste Podocyten-Marker
+  "Nphs2",     # Podocin
+  "Wt1",       # WT1 Transkriptionsfaktor
+  "Podxl",     # Podocalyxin
+  "Synpo",     # Synaptopodin
+  "Cd2ap",     # CD2-assoziiertes Protein
+  
+  # Glomeruläre Endothelzellen
+  "Pecam1",    # CD31
+  "Ehd3",      # spezifisch für glomeruläre Endothelzellen
+  
+  # Mesangialzellen
+  "Pdgfrb",    # PDGFR-beta
+  "Des",       # Desmin
+  
+  # Parietal Epithelial Cells (PEC)
+  "Cldn1",     # Claudin-1
+  "Ncam1"      # NCAM1
+)
+
+# Gensymbole -> Entrez IDs
+entrez_Podo <- mapIds(org.Mm.eg.db,
+                      keys      = gene_list_Podo,
+                      column    = "ENTREZID",
+                      keytype   = "SYMBOL",
+                      multiVals = "first")
+
+entrez_Podo <- entrez_Podo[!is.na(entrez_Podo)]
+entrez_Podo <- entrez_Podo[entrez_Podo %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_Podo), "von", length(gene_list_Podo), "\n")
+
+# LFC Matrix
+lfc_Podo <- lfc_combined[entrez_Podo, ]
+rownames(lfc_Podo) <- names(entrez_Podo)
+
+# Heatmap
+p <- pheatmap(lfc_Podo[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = TRUE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FoldChange - Glomerular Marker Genes (Negative Control)")
+         
+ggsave("results/working_figures/heatmap_genelist_gloms.pdf", 
+       plot = p, 
+       width = 8, height = 10)         
+```
+
