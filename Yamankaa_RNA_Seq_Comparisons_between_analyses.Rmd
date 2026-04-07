@@ -107,13 +107,13 @@ de_genes_dn_3d <- res_3d_df |>
 ## looking at STRONG effects for 3d
 #upregulated genes
 de_genes_up_strong_3d <- res_3d_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
 #downregulated genes
 de_genes_dn_strong_3d <- res_3d_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
@@ -141,13 +141,13 @@ de_genes_dn_2wks <- res_2wks_df |>
 ## looking at STRONG effects
 #upregulated genes
 de_genes_up_strong_2wks <- res_2wks_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
 #downregulated genes
 de_genes_dn_strong_2wks <- res_2wks_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
@@ -508,9 +508,13 @@ DT::datatable(head(ego_result_dn_consist))
 
 p1 <- dotplot(ego_result_up_consist, showCategory=10) +
   ggtitle("GO Analysis - consistently upregulated genes")
-
+p1
 ggsave("results/final_figures/consist_GO_upregulated.pdf", plot = p1, width = 8, height = 6)
 
+p2 <- dotplot(ego_result_dn_consist, showCategory=10) +
+  ggtitle("GO Analysis - consistently downregulated genes")
+p2
+ggsave("results/final_figures/consist_GO_downregulated.pdf", plot = p2, width = 8, height = 6)
 
 dotplot(ego_result_up_consist, showCategory=10) +
   ggtitle("GO - Consistently upregulated genes")

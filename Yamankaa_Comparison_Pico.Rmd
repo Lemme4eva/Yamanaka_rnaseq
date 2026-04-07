@@ -306,7 +306,7 @@ length(common_genes)
 
 lfc_combined <- data.frame(
   LFC_3d   = res_3d[common_genes,   "log2FoldChange"],
-  LFC_2wks = res_2wks[common_genes, "log2FoldChange"],
+  #LFC_2wks = res_2wks[common_genes, "log2FoldChange"],
   LFC_4Fj  = res_4Fj[common_genes,  "log2FoldChange_4Fj_vs_WT"],
   LFC_4FsB = res_4FsB[common_genes, "log2FoldChange_4FsB_vs_WT"],
   LFC_4Fk  = res_4Fk[common_genes,  "log2FoldChange_4Fk_vs_WT"],
@@ -336,8 +336,9 @@ lfc_heatmap_filtered <- lfc_heatmap[lfc_filter, ]
 dim(lfc_heatmap_filtered)
 
 # Gewünschte Spaltenreihenfolge definieren
-col_order <- c("LFC_4FsB", "LFC_4Fj", "LFC_4Fk", "LFC_3d", "LFC_2wks")
-
+col_order <- c("LFC_4FsB", "LFC_4Fj", "LFC_4Fk", "LFC_3d"
+               #, "LFC_2wks"
+)
 
 pheatmap(lfc_heatmap_filtered,
          color = colorRampPalette(c("blue", "white", "red"))(100),
@@ -400,7 +401,7 @@ ggsave("results/working_figures/heatmap_genelist.pdf",
 
 Trying another gene list, adding some more specific Tubular marker genes and taking out some more ubiquitous genes
 
-```{r}
+```{r Prox. Tubular list by Claude}
 gene_list_PT <- c("Slc5a2", "Slc34a1", "Lrp2", "Slc13a3", "Slc22a6", "Slc7a13", 
                   "Slc27a2", "Gatm", "Slc6a19", "Napsa", "Cubn", "Hnf4a", "Slc5a12", 
                   "Nox4", "Dab2", "Cd36", "Gpx1", "Cyp2e1", "Cyp4b1", "Inmt", 
@@ -437,6 +438,57 @@ ggsave("results/working_figures/heatmap_genelist_PT.pdf",
        plot = p, 
        width = 8, height = 10)
 ```
+
+I want to have it specific per segment.
+
+```{r}
+# Reihenfolge nach Segment
+row_order_PT <- c(
+  # S1
+  "Slc5a2", "Slc34a1", "Hnf4a", "Lrp2", "Cubn",
+  # S2
+  "Slc13a3", "Slc22a6", "Inmt", "Ces1f", "Ugt2b38", "Cyp2e1", "Cyp4b1",
+  # S3
+  "Slc7a13", "Slc27a2", "Acy3", "Cndp2", "Nudt19",
+  # Pan-PT
+  "Gatm", "Slc5a12", "Slc6a19", "Napsa", "Nox4", "Dab2", "Cd36", "Gpx1", "Selenop"
+)
+
+# Nur Gene die auch in lfc_PT vorhanden sind
+row_order_PT <- row_order_PT[row_order_PT %in% rownames(lfc_PT)]
+
+# Annotation für die Zeilen (Segment)
+annotation_row_PT <- data.frame(
+  Segment = c(
+    rep("S1", 5),
+    rep("S2", 7),
+    rep("S3", 5),
+    rep("Pan-PT", 9)
+  ),
+  row.names = row_order_PT
+)
+# nur vorhandene Gene
+annotation_row_PT <- annotation_row_PT[row_order_PT, , drop = FALSE]
+
+p <- pheatmap(lfc_PT[row_order_PT, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1.5, 1.5, length.out = 101),
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,  # Reihenfolge fixiert
+         annotation_row = annotation_row_PT,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FoldChange - Proximal Tubule Marker Genes by Segment")
+
+ggsave("results/working_figures/heatmap_genelist_PT_per_segment.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```
+
+
+
 
 Now the same for collecting duct cells - using a gene list, created by Claude
 
@@ -561,3 +613,281 @@ ggsave("results/working_figures/heatmap_genelist_gloms.pdf",
        width = 8, height = 10)         
 ```
 
+
+
+
+
+Using the gene list from the Agarwal 2021, Amer. J Physio. Renal Physiol.
+
+```{r Prox. Tubular list by Agarwal}
+gene_list_PT <- c("Lrp2", "Cubn", "Slc5a1", "Slc5a2", "Vim", "Havcr1", "Slc34a1", "Pdzk1", "Slc13a1", "Ly6a", "Aqp1")
+
+# Gensymbole -> Entrez IDs
+entrez_PT <- mapIds(org.Mm.eg.db,
+                    keys      = gene_list_PT,
+                    column    = "ENTREZID",
+                    keytype   = "SYMBOL",
+                    multiVals = "first")
+
+entrez_PT <- entrez_PT[!is.na(entrez_PT)]
+entrez_PT <- entrez_PT[entrez_PT %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_PT), "von", length(gene_list_PT), "\n")
+
+# LFC Matrix für PT Gene
+lfc_PT <- lfc_combined[entrez_PT, ]
+rownames(lfc_PT) <- names(entrez_PT)
+
+```
+
+I want to add asterisks to significant genes. 
+
+```{r significance matrix for PT}
+# P-Wert Matrix bauen (adjusted p-value = padj)
+pval_combined <- data.frame(
+  LFC_3d   = res_3d[common_genes,   "padj"],
+  LFC_4Fj  = res_4Fj[common_genes,  "padj_4Fj_vs_WT"],
+  LFC_4FsB = res_4FsB[common_genes, "padj_4FsB_vs_WT"],
+  LFC_4Fk  = res_4Fk[common_genes,  "padj_4Fk_vs_WT"],
+  row.names = common_genes
+)
+
+# PT-Gene rausfiltern
+pval_PT <- pval_combined[entrez_PT, ]
+rownames(pval_PT) <- names(entrez_PT)  # Gene Symbole als Rownames
+
+# Sternchen-Matrix erstellen
+stars_PT <- matrix("", nrow = nrow(pval_PT), ncol = ncol(pval_PT),
+                   dimnames = dimnames(pval_PT))
+
+stars_PT[pval_PT < 0.05]  <- "*"
+stars_PT[pval_PT < 0.01]  <- "**"
+stars_PT[pval_PT < 0.001] <- "***"
+stars_PT[is.na(pval_PT)]  <- ""  # NA-Werte absichern
+
+# Heatmap mit Sternchen
+p <- pheatmap(lfc_PT[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         display_numbers = stars_PT[, col_order],
+         number_color = "black",
+         fontsize_number = 10,
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FC - Proximal Tubule Marker Genes")
+
+ggsave("results/working_figures/heatmap_genelist_PT_Ajarwal.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```
+
+
+Now using Agarwal Genelist for Glomeruli.
+
+```{r Glomerular list by Agarwal}
+gene_list_glom <- c("Nphs2", "Cd2ap", "Ddn", "Synpo", "Actn4", "Wt1", "Kirrel1", "Podxl", "Clic5", "Ptpro", "Pdpn", "Il12a")
+
+# Gensymbole -> Entrez IDs
+entrez_glom <- mapIds(org.Mm.eg.db,
+                    keys      = gene_list_glom,
+                    column    = "ENTREZID",
+                    keytype   = "SYMBOL",
+                    multiVals = "first")
+
+entrez_glom <- entrez_glom[!is.na(entrez_glom)]
+entrez_glom <- entrez_glom[entrez_glom %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_glom), "von", length(gene_list_glom), "\n")
+
+# LFC Matrix für PT Gene
+lfc_glom <- lfc_combined[entrez_glom, ]
+rownames(lfc_glom) <- names(entrez_glom)
+
+```
+
+I want to add asterisks to significant genes. 
+
+```{r significance matrix for glom}
+# P-Wert Matrix bauen (adjusted p-value = padj)
+pval_combined <- data.frame(
+  LFC_3d   = res_3d[common_genes,   "padj"],
+  LFC_4Fj  = res_4Fj[common_genes,  "padj_4Fj_vs_WT"],
+  LFC_4FsB = res_4FsB[common_genes, "padj_4FsB_vs_WT"],
+  LFC_4Fk  = res_4Fk[common_genes,  "padj_4Fk_vs_WT"],
+  row.names = common_genes
+)
+
+# PT-Gene rausfiltern
+pval_glom <- pval_combined[entrez_glom, ]
+rownames(pval_glom) <- names(entrez_glom)  # Gene Symbole als Rownames
+
+# Sternchen-Matrix erstellen
+stars_glom <- matrix("", nrow = nrow(pval_glom), ncol = ncol(pval_glom),
+                   dimnames = dimnames(pval_glom))
+
+stars_glom[pval_glom < 0.05]  <- "*"
+stars_glom[pval_glom < 0.01]  <- "**"
+stars_glom[pval_glom < 0.001] <- "***"
+stars_glom[is.na(pval_glom)]  <- ""  # NA-Werte absichern
+
+# Heatmap mit Sternchen
+p <- pheatmap(lfc_glom[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         display_numbers = stars_glom[, col_order],
+         number_color = "black",
+         fontsize_number = 10,
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FC - Glomerular Genes")
+
+ggsave("results/working_figures/heatmap_genelist_glom_Ajarwal.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```
+
+
+Now using Agarwal Genelist for Distal Tubuli.
+
+```{r Distal tubular list by Agarwal}
+gene_list_DT <- c("Slc8a1", "Slc12a3", "Calb1", "Slc22a17")
+
+# Gensymbole -> Entrez IDs
+entrez_DT <- mapIds(org.Mm.eg.db,
+                    keys      = gene_list_DT,
+                    column    = "ENTREZID",
+                    keytype   = "SYMBOL",
+                    multiVals = "first")
+
+entrez_DT <- entrez_DT[!is.na(entrez_DT)]
+entrez_DT <- entrez_DT[entrez_DT %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_DT), "von", length(gene_list_DT), "\n")
+
+# LFC Matrix für PT Gene
+lfc_DT <- lfc_combined[entrez_DT, ]
+rownames(lfc_DT) <- names(entrez_DT)
+
+```
+
+I want to add asterisks to significant genes. 
+
+```{r significance matrix for distal tubular genes}
+# P-Wert Matrix bauen (adjusted p-value = padj)
+pval_combined <- data.frame(
+  LFC_3d   = res_3d[common_genes,   "padj"],
+  LFC_4Fj  = res_4Fj[common_genes,  "padj_4Fj_vs_WT"],
+  LFC_4FsB = res_4FsB[common_genes, "padj_4FsB_vs_WT"],
+  LFC_4Fk  = res_4Fk[common_genes,  "padj_4Fk_vs_WT"],
+  row.names = common_genes
+)
+
+# PT-Gene rausfiltern
+pval_DT <- pval_combined[entrez_DT, ]
+rownames(pval_DT) <- names(entrez_DT)  # Gene Symbole als Rownames
+
+# Sternchen-Matrix erstellen
+stars_DT <- matrix("", nrow = nrow(pval_DT), ncol = ncol(pval_DT),
+                   dimnames = dimnames(pval_DT))
+
+stars_DT[pval_DT < 0.05]  <- "*"
+stars_DT[pval_DT < 0.01]  <- "**"
+stars_DT[pval_DT < 0.001] <- "***"
+stars_DT[is.na(pval_DT)]  <- ""  # NA-Werte absichern
+
+# Heatmap mit Sternchen
+p <- pheatmap(lfc_DT[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         display_numbers = stars_DT[, col_order],
+         number_color = "black",
+         fontsize_number = 10,
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FC- Distal Tubular Genes")
+
+ggsave("results/working_figures/heatmap_genelist_DistTubular_Ajarwal.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```
+
+
+Now using Agarwal Genelist for Collecting Duct.
+
+```{r Glomerular list by Agarwal}
+gene_list_CD <- c("Slc4a1", "Atp6v1b1", "Slc26a4", "Slc26a11", "Slc4a8", "Avpr2", "Kcnj1", "P2ry14", "Slc14a2")
+
+# Gensymbole -> Entrez IDs
+entrez_CD <- mapIds(org.Mm.eg.db,
+                    keys      = gene_list_CD,
+                    column    = "ENTREZID",
+                    keytype   = "SYMBOL",
+                    multiVals = "first")
+
+entrez_CD <- entrez_CD[!is.na(entrez_CD)]
+entrez_CD <- entrez_CD[entrez_CD %in% rownames(lfc_combined)]
+
+cat("Gene gefunden:", length(entrez_CD), "von", length(gene_list_CD), "\n")
+
+# LFC Matrix für PT Gene
+lfc_CD <- lfc_combined[entrez_CD, ]
+rownames(lfc_CD) <- names(entrez_CD)
+
+```
+
+I want to add asterisks to significant genes. 
+
+```{r significance matrix for glom}
+# P-Wert Matrix bauen (adjusted p-value = padj)
+pval_combined <- data.frame(
+  LFC_3d   = res_3d[common_genes,   "padj"],
+  LFC_4Fj  = res_4Fj[common_genes,  "padj_4Fj_vs_WT"],
+  LFC_4FsB = res_4FsB[common_genes, "padj_4FsB_vs_WT"],
+  LFC_4Fk  = res_4Fk[common_genes,  "padj_4Fk_vs_WT"],
+  row.names = common_genes
+)
+
+# PT-Gene rausfiltern
+pval_CD <- pval_combined[entrez_CD, ]
+rownames(pval_CD) <- names(entrez_CD)  # Gene Symbole als Rownames
+
+# Sternchen-Matrix erstellen
+stars_CD <- matrix("", nrow = nrow(pval_CD), ncol = ncol(pval_CD),
+                   dimnames = dimnames(pval_CD))
+
+stars_CD[pval_CD < 0.05]  <- "*"
+stars_CD[pval_CD < 0.01]  <- "**"
+stars_CD[pval_CD < 0.001] <- "***"
+stars_CD[is.na(pval_CD)]  <- ""  # NA-Werte absichern
+
+# Heatmap mit Sternchen
+p <- pheatmap(lfc_CD[, col_order],
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-1, 1, length.out = 101),
+         display_numbers = stars_CD[, col_order],
+         number_color = "black",
+         fontsize_number = 10,
+         show_rownames = TRUE,
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         fontsize_row = 9,
+         cellheight = 14,
+         cellwidth = 50,
+         main = "Log2FC- Collecting Duct Genes")
+
+ggsave("results/working_figures/heatmap_genelist_CD_Ajarwal.pdf", 
+       plot = p, 
+       width = 8, height = 10)
+```

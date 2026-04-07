@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #gitcreds_set()
 
 # # Retrieve token from the gitcreds store
-# token <- gitcreds::gitcreds_get()$password
+#token <- gitcreds::gitcreds_get()$password
 
 
 #if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")

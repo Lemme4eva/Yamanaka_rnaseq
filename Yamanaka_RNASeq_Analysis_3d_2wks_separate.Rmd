@@ -59,6 +59,8 @@ library(enrichplot)
 library(tibble)
 library(ggrepel)
 library(writexl)
+library(tidyr)
+library(dplyr)
 
 #Use external function script
 source("scripts/plotPCA2.R")
@@ -717,13 +719,13 @@ To detect stronger effects, we can also set the log2FC threshold to 1, so that o
 ```{r strong GO effects for 3 day analysis}
 #upregulated genes
 de_genes_up_strong <- res_3d_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
 #downregulated genes
 de_genes_dn_strong <- res_3d_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
@@ -770,14 +772,14 @@ There are many different plot types that we can use for visualization.
 # Plot 1 - Upregulated
 p1 <- dotplot(ego_result_up_strong, showCategory=10) +
   ggtitle("GO Analysis - Upregulated Genes")
-
-ggsave("results/final_figures/3d_GO_upregulated_logFC1.pdf", plot = p1, width = 8, height = 6)
+p1
+ggsave("results/final_figures/3d_GO_upregulated.pdf", plot = p1, width = 8, height = 6)
 
 # Plot 2 - Downregulated
 p2 <- dotplot(ego_result_dn_strong, showCategory=10) +
   ggtitle("GO Analysis - Downregulated Genes")
-
-ggsave("results/final_figures/3d_GO_downregulated_logFC1.pdf", plot = p2, width = 8, height = 6)
+p2
+ggsave("results/final_figures/3d_GO_downregulated.pdf", plot = p2, width = 8, height = 6)
 
 
 
@@ -880,13 +882,13 @@ To detect stronger effects, we can also set the log2FC threshold to 1, so that o
 ```{r strong GO effects for 2 weeks analysis}
 #upregulated genes
 de_genes_up_strong <- res_2wks_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange > 0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
 #downregulated genes
 de_genes_dn_strong <- res_2wks_df |>
-  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -1) |>
+  dplyr::filter(!is.na(padj), padj <= 0.05, log2FoldChange < -0.5) |>
   dplyr::pull(gene_symbol) |>
   unique()
 
@@ -1342,5 +1344,145 @@ ggsave("results/final_figures/2wks_KEGG_dn_logFC1.pdf", plot = kegg_dn_2wks, wid
 ```
 
 
+## Further analysis - fatty acid metabolism
 
+
+```{r extract genes belonging to the Top 30 clusters}
+
+top30_up_2wks <- as.data.frame(ego_result_up_strong)[1:30, ]
+genes_list <- strsplit(top30_up_2wks$geneID, "/")
+names(genes_list) <- top30_up_2wks$Description
+unique_genes <- unique(unlist(genes_list)) #only keep unique genes
+
+#put genes into a table
+df_top30_up_2wks <- top30_up_2wks %>%
+  select(Description, geneID) %>%
+  separate_rows(geneID, sep="/")
+
+res_2wks_df_GOTopGenes <- res_2wks_df[res_2wks_df$gene_symbol %in% unique_genes,]
+
+```
+
+
+```{r Fatty acid metabolism}
+#taking gene list from Susztaks paper (Kang et al. 2015)
+fatty_acid_genes <- c("Acat1", "Aldh3a2", "Acaa2", "Acaa1b", "Acaa1a", "Cyp4a10", "Aldh7a1", "Echs1", "Fads1",
+                      "Aldh1l1", "Adhf", "Aldh2", "Adh5", "Acox1", "Hadh", "Aldh9a1", "Acadl",
+                      "Gcdh", "Cpt1a", "Cpt2", "Acsl1", "Acat2", "Ehhadh", "Hadha", "Acadsr",
+                      "Acsl5", "Acsl4", "Adh1")
+
+res_2wks_df_fatty_acid_sig <- res_2wks_df[res_2wks_df$gene_symbol %in% fatty_acid_genes & 
+  res_2wks_df$padj < 0.05,]
+res_2wks_df_fatty_acid <- res_2wks_df[res_2wks_df$gene_symbol %in% fatty_acid_genes,]
+
+res_3d_df_fatty_acid <- res_3d_df[res_3d_df$gene_symbol %in% fatty_acid_genes,]
+
+
+```
+
+```{r Make a heatmap for these genes}
+
+vsd_true_2wks <- vst(dds_2wks, blind=FALSE) # this time use the FALSE argument to keep differences
+mat_2wks <- assay(vsd_true_2wks)
+
+#map EntrezIDs to gene symbols
+entrez_ids_2wks <- rownames(mat_2wks)
+gene_symbols_2wks <- mapIds(org.Mm.eg.db,
+                       keys = entrez_ids_2wks,
+                       column = "SYMBOL",
+                       keytype = "ENTREZID",
+                       multiVals = "first")  # take first if multiple matches
+
+#Add gene symbols to the results table
+rownames(mat_2wks) <- gene_symbols_2wks
+
+# remove NA
+mat_2wks <- mat_2wks[!is.na(rownames(mat_2wks)), ]
+
+genes_of_interest <- res_2wks_df_fatty_acid$gene_symbol
+genes_of_interest <- res_2wks_df_fatty_acid_sig$gene_symbol
+
+
+mat_subset <- mat_2wks[rownames(mat_2wks) %in% genes_of_interest, ]
+
+#scale the matrix subset for better visualization (optional)
+mat_scaled <- t(scale(t(mat_subset)))
+
+gene_order <- c(
+  # FA import
+  "Cpt1a", "Cpt2", "Acsl1", "Acsl4", "Acsl5",
+  
+  # mitochondrial FAO
+  "Acadl", "Acaa2", "Hadha", "Hadh", "Echs1",
+  
+  # peroxisomal FAO
+  "Acox1", "Acaa1a", "Acaa1b", "Ehhadh",
+  
+  # acetyl-CoA metabolism
+  "Acat1", "Acat2",
+  
+  # lipid modification
+  "Fads1",
+  
+  # detox
+  "Aldh1l1", "Aldh2", "Aldh3a2", "Aldh7a1", "Aldh9a1",
+  
+  # other
+  "Gcdh",
+  
+  # ADH/CYP
+  "Adh1", "Adh5", "Cyp4a10"
+)
+# 3. Samples nach Genotyp sortieren
+# ------------------------------
+genotype_factor <- factor(colData(dds_2wks)$genotype,
+                          levels = c("Ctrl", "CrePos"))
+
+# explizite Reihenfolge: Ctrl zuerst, dann CrePos
+sample_order <- c(
+  which(genotype_factor == "Ctrl"),
+  which(genotype_factor == "CrePos")
+)
+
+mat_scaled <- mat_scaled[, sample_order]
+
+# ------------------------------
+# 4. Column-Annotation vorbereiten
+# ------------------------------
+annotation_col <- data.frame(
+  Genotype = genotype_factor[sample_order]
+)
+rownames(annotation_col) <- colnames(mat_scaled)
+
+# ------------------------------
+# 5. Row-Annotation (optional: Pathway/Kategorie)
+# ------------------------------
+annotation_row <- data.frame(
+  Pathway = c(
+    rep("FA import", 5),
+    rep("Mito FAO", 5),
+    rep("Perox FAO", 4),
+    rep("Acetyl-CoA", 2),
+    "Lipid mod",
+    rep("Detox", 5),
+    "Other",
+    rep("ADH/CYP", 3)
+  )
+)
+rownames(annotation_row) <- rownames(mat_scaled)
+
+# ------------------------------
+# 6. Heatmap plotten
+# ------------------------------
+library(pheatmap)
+
+pheatmap(
+  mat_scaled,
+  cluster_rows = TRUE,      # Gene bleiben in biologischer Reihenfolge
+  cluster_cols = FALSE,      # Columns bleiben in Genotyp Reihenfolge
+  annotation_col = annotation_col,
+  fontsize_row = 9,
+  fontsize_col = 10,
+)
+```
 
